@@ -12,7 +12,14 @@ class ProjectStatus(models.TextChoices):
     APPROVED = 'approved', _('已通过')
     REJECTED = 'rejected', _('已拒绝')
     FUNDING = 'funding', _('募集中')
+    EXECUTING = 'executing', _('执行中')
     COMPLETED = 'completed', _('已完成')
+
+
+class RefundRequestStatus(models.TextChoices):
+    PENDING = 'pending', _('待审核')
+    APPROVED = 'approved', _('已通过')
+    REJECTED = 'rejected', _('已拒绝')
 
 
 class ProjectCategory(models.TextChoices):
@@ -53,6 +60,8 @@ class Project(models.Model):
     cover_image = models.ImageField(upload_to='projects/covers/', blank=True, null=True, verbose_name='封面图片')
     target_amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='目标金额（元）')
     current_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00, verbose_name='已筹金额（元）')
+    used_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00, verbose_name='已使用金额（元）')
+    start_date = models.DateField(blank=True, null=True, verbose_name='项目开始日期')
     deadline = models.DateField(verbose_name='截止日期')
     status = models.CharField(
         max_length=20,
@@ -90,6 +99,26 @@ class Project(models.Model):
     @property
     def budget_total(self):
         return self.budgets.aggregate(total=models.Sum('amount'))['total'] or 0
+
+    @property
+    def execution_ratio(self):
+        if self.current_amount <= 0:
+            return Decimal('0')
+        return round(self.used_amount / self.current_amount, 4)
+
+    @property
+    def is_refundable(self):
+        return self.status in [ProjectStatus.FUNDING, ProjectStatus.APPROVED, ProjectStatus.EXECUTING]
+
+    def get_refundable_amount(self, donation_amount):
+        if self.status in [ProjectStatus.FUNDING, ProjectStatus.APPROVED]:
+            return donation_amount
+        elif self.status == ProjectStatus.EXECUTING:
+            ratio = self.execution_ratio
+            if ratio >= 1:
+                return Decimal('0')
+            return round(donation_amount * (1 - ratio), 2)
+        return Decimal('0')
 
 
 class ProjectBudget(models.Model):
@@ -151,7 +180,11 @@ class Donation(models.Model):
     message = models.CharField(max_length=500, blank=True, null=True, verbose_name='留言')
     paid_at = models.DateTimeField(blank=True, null=True, verbose_name='支付时间')
     refunded_at = models.DateTimeField(blank=True, null=True, verbose_name='退款时间')
+    refund_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00, verbose_name='退款金额（元）')
+    platform_fee = models.DecimalField(max_digits=12, decimal_places=2, default=0.00, verbose_name='平台维护费（元）')
+    execution_ratio_at_refund = models.DecimalField(max_digits=6, decimal_places=4, default=0.0000, verbose_name='退款时执行比例')
     transaction_id = models.CharField(max_length=64, blank=True, null=True, verbose_name='交易流水号')
+    refund_transaction_id = models.CharField(max_length=64, blank=True, null=True, verbose_name='退款交易流水号')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 
@@ -202,5 +235,158 @@ class Donation(models.Model):
             project.save()
 
     @transaction.atomic
-    def refund(self):
-        return self.update_status(DonationStatus.REFUNDED)
+    def refund(self, refund_transaction_id=None):
+        from django.utils import timezone
+
+        PLATFORM_FEE_RATE = Decimal('0.006')
+
+        if not self.can_transition_to(DonationStatus.REFUNDED):
+            raise ValueError(
+                f'无法从状态 {self.get_status_display()} 转换到 {dict(DonationStatus.choices)[DonationStatus.REFUNDED]}'
+            )
+
+        project = Project.objects.select_for_update().get(pk=self.project_id)
+
+        if not project.is_refundable:
+            raise ValueError(f'项目状态为 {project.get_status_display()}，不支持退款')
+
+        refundable_amount = project.get_refundable_amount(self.amount)
+        if refundable_amount <= 0:
+            raise ValueError('该捐赠无可退余额')
+
+        platform_fee = round(refundable_amount * PLATFORM_FEE_RATE, 2)
+        actual_refund = round(refundable_amount - platform_fee, 2)
+
+        if actual_refund <= 0:
+            raise ValueError('扣除平台维护费后退款金额为0，无法退款')
+
+        old_status = self.status
+        self.status = DonationStatus.REFUNDED
+        self.refunded_at = timezone.now()
+        self.refund_amount = actual_refund
+        self.platform_fee = platform_fee
+        self.execution_ratio_at_refund = project.execution_ratio
+        if refund_transaction_id:
+            self.refund_transaction_id = refund_transaction_id
+
+        if old_status == DonationStatus.PAID:
+            project.current_amount = models.F('current_amount') - self.amount
+            if project.status == ProjectStatus.EXECUTING and project.used_amount > 0:
+                amount_to_reduce = self.amount * project.execution_ratio
+                project.used_amount = models.F('used_amount') - amount_to_reduce
+            project.save()
+            project.refresh_from_db()
+
+            if project.current_amount < project.target_amount and project.status == ProjectStatus.COMPLETED:
+                project.status = ProjectStatus.FUNDING
+                project.save()
+
+        self.save()
+        return self
+
+    def calculate_refund_preview(self):
+        PLATFORM_FEE_RATE = Decimal('0.006')
+        project = self.project
+
+        if not project.is_refundable or self.status != DonationStatus.PAID:
+            return {
+                'can_refund': False,
+                'reason': '该捐赠不支持退款' if self.status != DonationStatus.PAID else f'项目状态为 {project.get_status_display()}，不支持退款'
+            }
+
+        refundable_amount = project.get_refundable_amount(self.amount)
+        if refundable_amount <= 0:
+            return {
+                'can_refund': False,
+                'reason': '该捐赠无可退余额'
+            }
+
+        platform_fee = round(refundable_amount * PLATFORM_FEE_RATE, 2)
+        actual_refund = round(refundable_amount - platform_fee, 2)
+
+        return {
+            'can_refund': actual_refund > 0,
+            'donation_amount': self.amount,
+            'refundable_amount': refundable_amount,
+            'platform_fee': platform_fee,
+            'platform_fee_rate': f'{PLATFORM_FEE_RATE * 100}%',
+            'actual_refund': actual_refund,
+            'execution_ratio': project.execution_ratio,
+            'project_status': project.get_status_display()
+        }
+
+
+class RefundRequest(models.Model):
+    donation = models.OneToOneField(
+        Donation,
+        on_delete=models.CASCADE,
+        related_name='refund_request',
+        verbose_name='关联捐赠'
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='refund_requests',
+        verbose_name='申请人'
+    )
+    reason = models.TextField(max_length=1000, verbose_name='退款原因')
+    status = models.CharField(
+        max_length=20,
+        choices=RefundRequestStatus.choices,
+        default=RefundRequestStatus.PENDING,
+        verbose_name='申请状态'
+    )
+    review_reason = models.TextField(max_length=1000, blank=True, null=True, verbose_name='审核意见')
+    reviewer = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='reviewed_refunds',
+        verbose_name='审核员'
+    )
+    reviewed_at = models.DateTimeField(blank=True, null=True, verbose_name='审核时间')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='申请时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '退款申请'
+        verbose_name_plural = verbose_name
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.donation.order_no} - {self.get_status_display()}'
+
+    @transaction.atomic
+    def approve(self, reviewer, refund_transaction_id=None):
+        from django.utils import timezone
+
+        if self.status != RefundRequestStatus.PENDING:
+            raise ValueError('该申请已处理，无法重复审核')
+
+        self.donation.refund(refund_transaction_id)
+
+        self.status = RefundRequestStatus.APPROVED
+        self.reviewer = reviewer
+        self.reviewed_at = timezone.now()
+        self.save()
+
+        return self
+
+    @transaction.atomic
+    def reject(self, reviewer, review_reason):
+        from django.utils import timezone
+
+        if self.status != RefundRequestStatus.PENDING:
+            raise ValueError('该申请已处理，无法重复审核')
+
+        if not review_reason:
+            raise ValueError('拒绝时必须填写审核意见')
+
+        self.status = RefundRequestStatus.REJECTED
+        self.reviewer = reviewer
+        self.review_reason = review_reason
+        self.reviewed_at = timezone.now()
+        self.save()
+
+        return self

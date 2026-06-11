@@ -3,7 +3,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from django.utils import timezone
 from django.db import transaction
-from .models import Project, ProjectStatus, Donation, DonationStatus
+from decimal import Decimal, InvalidOperation
+from .models import Project, ProjectStatus, Donation, DonationStatus, RefundRequest, RefundRequestStatus
 from .serializers import (
     ProjectListSerializer,
     ProjectDetailSerializer,
@@ -12,7 +13,11 @@ from .serializers import (
     DonationListSerializer,
     DonationDetailSerializer,
     DonationCreateSerializer,
-    PaymentCallbackSerializer
+    PaymentCallbackSerializer,
+    RefundRequestCreateSerializer,
+    RefundRequestReviewSerializer,
+    RefundRequestListSerializer,
+    RefundPreviewSerializer
 )
 
 
@@ -32,7 +37,7 @@ class ProjectPublicListView(generics.ListAPIView):
 
     def get_queryset(self):
         queryset = Project.objects.filter(
-            status__in=[ProjectStatus.APPROVED, ProjectStatus.FUNDING, ProjectStatus.COMPLETED]
+            status__in=[ProjectStatus.APPROVED, ProjectStatus.FUNDING, ProjectStatus.EXECUTING, ProjectStatus.COMPLETED]
         )
         category = self.request.query_params.get('category')
         if category:
@@ -312,8 +317,9 @@ class DonationRefundView(generics.GenericAPIView):
 
     def post(self, request, *args, **kwargs):
         donation = self.get_object()
+        refund_transaction_id = request.data.get('refund_transaction_id')
         try:
-            donation.refund()
+            donation.refund(refund_transaction_id)
             detail_serializer = DonationDetailSerializer(donation)
             return Response({
                 'code': 200,
@@ -325,6 +331,206 @@ class DonationRefundView(generics.GenericAPIView):
                 'code': 400,
                 'message': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class DonationRefundPreviewView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+    queryset = Donation.objects.all()
+
+    def get(self, request, *args, **kwargs):
+        donation = self.get_object()
+        if donation.user != request.user and request.user.role != 'auditor' and request.user.role != 'admin':
+            return Response({
+                'code': 403,
+                'message': '无权查看该捐赠的退款信息'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        preview_data = donation.calculate_refund_preview()
+        serializer = RefundPreviewSerializer(preview_data)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class RefundRequestCreateView(generics.CreateAPIView):
+    serializer_class = RefundRequestCreateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        refund_request = serializer.save(user=request.user)
+        detail_serializer = RefundRequestListSerializer(refund_request)
+        return Response({
+            'code': 200,
+            'message': '退款申请提交成功，请等待审核',
+            'data': detail_serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+
+class MyRefundRequestListView(generics.ListAPIView):
+    serializer_class = RefundRequestListSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return RefundRequest.objects.filter(user=self.request.user).order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class RefundRequestListView(generics.ListAPIView):
+    serializer_class = RefundRequestListSerializer
+    permission_classes = [IsAuthenticated, IsAuditor]
+
+    def get_queryset(self):
+        return RefundRequest.objects.all().order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        status_filter = request.query_params.get('status', 'pending')
+        if status_filter != 'all':
+            queryset = queryset.filter(status=status_filter)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class RefundRequestReviewView(generics.GenericAPIView):
+    serializer_class = RefundRequestReviewSerializer
+    permission_classes = [IsAuthenticated, IsAuditor]
+    queryset = RefundRequest.objects.all()
+
+    def post(self, request, *args, **kwargs):
+        refund_request = self.get_object()
+        if refund_request.status != RefundRequestStatus.PENDING:
+            return Response({
+                'code': 400,
+                'message': '该申请已处理，无法重复审核'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = serializer.validated_data
+
+        try:
+            action = validated_data['action']
+            if action == 'approve':
+                refund_transaction_id = request.data.get('refund_transaction_id')
+                refund_request.approve(request.user, refund_transaction_id)
+                message = '退款申请已通过，退款已完成'
+            else:
+                refund_request.reject(request.user, validated_data.get('review_reason', ''))
+                message = '退款申请已拒绝'
+
+            detail_serializer = RefundRequestListSerializer(refund_request)
+            return Response({
+                'code': 200,
+                'message': message,
+                'data': detail_serializer.data
+            })
+        except ValueError as e:
+            return Response({
+                'code': 400,
+                'message': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ProjectStartView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated, IsAuditor]
+    queryset = Project.objects.all()
+
+    def post(self, request, *args, **kwargs):
+        project = self.get_object()
+        if project.status != ProjectStatus.FUNDING:
+            return Response({
+                'code': 400,
+                'message': '只有募集中的项目可以开始执行'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if project.current_amount <= 0:
+            return Response({
+                'code': 400,
+                'message': '项目尚无筹款，无法开始执行'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        project.status = ProjectStatus.EXECUTING
+        project.start_date = timezone.now().date()
+        project.save()
+
+        detail_serializer = ProjectDetailSerializer(project)
+        return Response({
+            'code': 200,
+            'message': '项目已进入执行期',
+            'data': detail_serializer.data
+        })
+
+
+class ProjectUpdateUsedAmountView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated, IsAuditor]
+    queryset = Project.objects.all()
+
+    def post(self, request, *args, **kwargs):
+        project = self.get_object()
+        if project.status != ProjectStatus.EXECUTING:
+            return Response({
+                'code': 400,
+                'message': '只有执行中的项目可以更新已使用金额'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        used_amount = request.data.get('used_amount')
+        if used_amount is None:
+            return Response({
+                'code': 400,
+                'message': '请提供已使用金额'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            used_amount = Decimal(str(used_amount))
+        except (ValueError, InvalidOperation):
+            return Response({
+                'code': 400,
+                'message': '已使用金额格式不正确'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if used_amount < 0:
+            return Response({
+                'code': 400,
+                'message': '已使用金额不能为负数'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if used_amount > project.current_amount:
+            return Response({
+                'code': 400,
+                'message': '已使用金额不能超过当前已筹金额'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        project.used_amount = used_amount
+        project.save()
+
+        detail_serializer = ProjectDetailSerializer(project)
+        return Response({
+            'code': 200,
+            'message': '已使用金额更新成功',
+            'data': {
+                'project': detail_serializer.data,
+                'execution_ratio': float(project.execution_ratio * 100)
+            }
+        })
 
 
 class ProjectDonationListView(generics.ListAPIView):

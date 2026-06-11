@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from decimal import Decimal
 import json
-from .models import Project, ProjectBudget, ProjectStatus, ProjectCategory, Donation, DonationStatus
+from .models import Project, ProjectBudget, ProjectStatus, ProjectCategory, Donation, DonationStatus, RefundRequest, RefundRequestStatus
 
 User = get_user_model()
 
@@ -42,13 +42,15 @@ class ProjectListSerializer(serializers.ModelSerializer):
     category_display = serializers.CharField(source='get_category_display', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     progress_percentage = serializers.FloatField(read_only=True)
+    execution_ratio = serializers.DecimalField(max_digits=6, decimal_places=4, read_only=True)
 
     class Meta:
         model = Project
         fields = [
             'id', 'title', 'category', 'category_display', 'description',
-            'cover_image', 'target_amount', 'current_amount', 'progress_percentage',
-            'deadline', 'status', 'status_display', 'initiator', 'created_at'
+            'cover_image', 'target_amount', 'current_amount', 'used_amount',
+            'progress_percentage', 'execution_ratio',
+            'start_date', 'deadline', 'status', 'status_display', 'initiator', 'created_at'
         ]
 
 
@@ -59,13 +61,16 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
     progress_percentage = serializers.FloatField(read_only=True)
     budgets = ProjectBudgetSerializer(many=True, read_only=True)
     budget_total = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    execution_ratio = serializers.DecimalField(max_digits=6, decimal_places=4, read_only=True)
+    is_refundable = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Project
         fields = [
             'id', 'title', 'category', 'category_display', 'description', 'detail_content',
-            'cover_image', 'target_amount', 'current_amount', 'progress_percentage',
-            'deadline', 'status', 'status_display', 'reject_reason',
+            'cover_image', 'target_amount', 'current_amount', 'used_amount', 'progress_percentage',
+            'execution_ratio', 'is_refundable', 'start_date', 'deadline',
+            'status', 'status_display', 'reject_reason',
             'initiator', 'budgets', 'budget_total', 'audited_at', 'created_at', 'updated_at'
         ]
 
@@ -186,7 +191,9 @@ class DonationDetailSerializer(serializers.ModelSerializer):
         model = Donation
         fields = [
             'id', 'order_no', 'user', 'project', 'amount', 'status', 'status_display',
-            'message', 'paid_at', 'refunded_at', 'transaction_id', 'created_at', 'updated_at'
+            'message', 'paid_at', 'refunded_at', 'refund_amount', 'platform_fee',
+            'execution_ratio_at_refund', 'transaction_id', 'refund_transaction_id',
+            'created_at', 'updated_at'
         ]
 
 
@@ -239,3 +246,63 @@ class PaymentCallbackSerializer(serializers.Serializer):
 
         attrs['donation'] = donation
         return attrs
+
+
+class RefundRequestCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RefundRequest
+        fields = ['donation', 'reason']
+
+    def validate_donation(self, value):
+        user = self.context['request'].user
+        if value.user != user:
+            raise serializers.ValidationError('只能申请退还自己的捐赠')
+        if value.status != DonationStatus.PAID:
+            raise serializers.ValidationError('该捐赠状态不支持退款')
+        if not value.project.is_refundable:
+            raise serializers.ValidationError('该项目不支持退款')
+        if hasattr(value, 'refund_request') and value.refund_request:
+            if value.refund_request.status == RefundRequestStatus.PENDING:
+                raise serializers.ValidationError('该捐赠已有退款申请待审核')
+            if value.refund_request.status == RefundRequestStatus.APPROVED:
+                raise serializers.ValidationError('该捐赠已完成退款')
+        preview = value.calculate_refund_preview()
+        if not preview.get('can_refund'):
+            raise serializers.ValidationError(preview.get('reason', '该捐赠不支持退款'))
+        return value
+
+
+class RefundRequestReviewSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=[('approve', '通过'), ('reject', '拒绝')])
+    review_reason = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+
+    def validate(self, attrs):
+        if attrs.get('action') == 'reject' and not attrs.get('review_reason'):
+            raise serializers.ValidationError({'review_reason': '拒绝时必须填写审核意见'})
+        return attrs
+
+
+class RefundRequestListSerializer(serializers.ModelSerializer):
+    donation = DonationDetailSerializer(read_only=True)
+    user = DonorInfoSerializer(read_only=True)
+    reviewer = DonorInfoSerializer(read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = RefundRequest
+        fields = [
+            'id', 'donation', 'user', 'reason', 'status', 'status_display',
+            'review_reason', 'reviewer', 'reviewed_at', 'created_at', 'updated_at'
+        ]
+
+
+class RefundPreviewSerializer(serializers.Serializer):
+    can_refund = serializers.BooleanField()
+    reason = serializers.CharField(required=False, allow_null=True)
+    donation_amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    refundable_amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    platform_fee = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    platform_fee_rate = serializers.CharField(required=False)
+    actual_refund = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    execution_ratio = serializers.DecimalField(max_digits=6, decimal_places=4, required=False)
+    project_status = serializers.CharField(required=False)
