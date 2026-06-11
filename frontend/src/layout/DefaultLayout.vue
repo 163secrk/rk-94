@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -129,6 +129,14 @@ const handleCommand = (command: string) => {
     router.push('/dashboard')
   }
 }
+
+onMounted(async () => {
+  try {
+    await userStore.fetchUserInfo()
+  } catch {
+    // fetchUserInfo 内部已处理错误
+  }
+})
 </script>
 
 <style scoped>

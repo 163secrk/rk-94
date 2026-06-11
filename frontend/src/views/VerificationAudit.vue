@@ -279,7 +279,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { getVerificationList, auditVerification } from '@/api/auth'
@@ -294,7 +294,11 @@ import {
 const router = useRouter()
 const userStore = useUserStore()
 const loading = ref(false)
-const verifications = ref<VerificationProfile[]>([])
+const allVerifications = ref<VerificationProfile[]>([])
+const verifications = computed(() => {
+  if (activeStatus.value === 'all') return allVerifications.value
+  return allVerifications.value.filter(p => p.status === activeStatus.value)
+})
 const activeStatus = ref('pending')
 const detailDialogVisible = ref(false)
 const auditDialogVisible = ref(false)
@@ -324,7 +328,7 @@ const auditRules: FormRules = {
 }
 
 const stats = computed(() => {
-  const all = verifications.value
+  const all = allVerifications.value
   return [
     { key: 'pending', label: '待审核', count: all.filter(p => p.status === 'pending').length, color: 'text-yellow-500', bgColor: 'bg-yellow-50', icon: 'Clock' },
     { key: 'approved', label: '已通过', count: all.filter(p => p.status === 'approved').length, color: 'text-green-500', bgColor: 'bg-green-50', icon: 'CircleCheckFilled' },
@@ -336,18 +340,14 @@ const stats = computed(() => {
 const fetchVerifications = async () => {
   loading.value = true
   try {
-    const res = await getVerificationList(activeStatus.value === 'all' ? 'all' : activeStatus.value)
-    verifications.value = res
+    const res = await getVerificationList('all')
+    allVerifications.value = res
   } catch (error) {
     console.error('Fetch verification list error:', error)
   } finally {
     loading.value = false
   }
 }
-
-watch(activeStatus, () => {
-  fetchVerifications()
-})
 
 const statusTagType = (status: string) => {
   switch (status) {
