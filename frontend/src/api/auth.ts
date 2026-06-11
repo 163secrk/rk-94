@@ -36,3 +36,13 @@ export const submitVerification = (data: FormData) => {
     },
   })
 }
+
+export const getVerificationList = (status: string = 'pending') => {
+  return request.get<any, VerificationProfile[]>('/auth/verification/list/', {
+    params: { status },
+  })
+}
+
+export const auditVerification = (id: number, data: { status: string; reject_reason?: string }) => {
+  return request.post<any, VerificationProfile>(`/auth/verification/${id}/audit/`, data)
+}

@@ -30,7 +30,7 @@
           </div>
         </div>
         <div class="hidden md:block text-8xl love-heart opacity-80">
-          <el-icon><HeartFilled /></el-icon>
+          <span>❤️</span>
         </div>
       </div>
     </div>
@@ -132,6 +132,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useUserStore } from '@/stores/user'
+import {
+  CircleCheck, Warning, Wallet, Files, Star,
+  TrendCharts, InfoFilled, User, Search, Plus, FolderOpened, CircleCheckFilled,
+  DocumentChecked
+} from '@element-plus/icons-vue'
 
 const userStore = useUserStore()
 
@@ -190,6 +195,12 @@ const quickActions = computed(() => {
       icon: 'CircleCheck',
       path: '/projects/audit',
       colorClass: 'from-orange-500 to-orange-400 hover:from-orange-600 hover:to-orange-500',
+    })
+    actions.splice(2, 0, {
+      name: '认证审核',
+      icon: 'DocumentChecked',
+      path: '/verification/audit',
+      colorClass: 'from-purple-500 to-purple-400 hover:from-purple-600 hover:to-purple-500',
     })
   }
 

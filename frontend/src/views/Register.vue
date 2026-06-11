@@ -3,7 +3,7 @@
     <div class="w-full max-w-md">
       <div class="text-center mb-8">
         <div class="inline-flex items-center justify-center w-20 h-20 bg-white rounded-full shadow-lg mb-4">
-          <el-icon class="text-love text-4xl love-heart"><HeartFilled /></el-icon>
+          <span class="text-love text-4xl love-heart inline-block">❤️</span>
         </div>
         <h1 class="text-3xl font-bold text-gray-800 mb-2">爱心汇</h1>
         <p class="text-gray-600">LoveHub 捐赠管理平台</p>

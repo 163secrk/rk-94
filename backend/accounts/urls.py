@@ -5,7 +5,9 @@ from .views import (
     CustomTokenObtainPairView,
     UserInfoView,
     UserLogoutView,
-    VerificationProfileView
+    VerificationProfileView,
+    VerificationListForAuditView,
+    VerificationAuditView
 )
 
 urlpatterns = [
@@ -15,4 +17,6 @@ urlpatterns = [
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('user/info/', UserInfoView.as_view(), name='user_info'),
     path('verification/', VerificationProfileView.as_view(), name='verification'),
+    path('verification/list/', VerificationListForAuditView.as_view(), name='verification_list'),
+    path('verification/<int:pk>/audit/', VerificationAuditView.as_view(), name='verification_audit'),
 ]

@@ -104,3 +104,13 @@ class VerificationProfileSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('已通过的实名认证无法修改')
         validated_data['status'] = VerificationStatus.PENDING
         return super().update(instance, validated_data)
+
+
+class VerificationAuditSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=[('approved', '通过'), ('rejected', '拒绝')])
+    reject_reason = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+
+    def validate(self, attrs):
+        if attrs.get('status') == 'rejected' and not attrs.get('reject_reason'):
+            raise serializers.ValidationError({'reject_reason': '拒绝原因不能为空'})
+        return attrs

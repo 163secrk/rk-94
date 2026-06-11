@@ -1,15 +1,22 @@
-from rest_framework import generics, status, views
+from rest_framework import generics, status, views, permissions
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from .serializers import (
     UserRegisterSerializer,
     CustomTokenObtainPairSerializer,
     UserInfoSerializer,
-    VerificationProfileSerializer
+    VerificationProfileSerializer,
+    VerificationAuditSerializer
 )
-from .models import VerificationProfile
+from .models import VerificationProfile, VerificationStatus
+
+
+class IsAuditor(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role == 'auditor'
 
 User = get_user_model()
 
@@ -144,4 +151,75 @@ class VerificationProfileView(generics.ListCreateAPIView, generics.UpdateAPIView
             'code': 200,
             'message': '实名认证更新成功，请等待审核',
             'data': serializer.data
+        })
+
+
+class VerificationListForAuditView(generics.ListAPIView):
+    serializer_class = VerificationProfileSerializer
+    permission_classes = [IsAuthenticated, IsAuditor]
+
+    def get_queryset(self):
+        status_filter = self.request.query_params.get('status', 'pending')
+        if status_filter == 'all':
+            return VerificationProfile.objects.all().select_related('user').order_by('-submitted_at')
+        return VerificationProfile.objects.filter(
+            status=status_filter
+        ).select_related('user').order_by('-submitted_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        data = serializer.data
+        for i, item in enumerate(data):
+            item['user'] = {
+                'id': queryset[i].user.id,
+                'username': queryset[i].user.username,
+                'email': queryset[i].user.email,
+                'role': queryset[i].user.role,
+                'role_display': queryset[i].user.get_role_display(),
+            }
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': data
+        })
+
+
+class VerificationAuditView(generics.GenericAPIView):
+    serializer_class = VerificationAuditSerializer
+    permission_classes = [IsAuthenticated, IsAuditor]
+    queryset = VerificationProfile.objects.all()
+
+    def post(self, request, *args, **kwargs):
+        profile = self.get_object()
+        if profile.status != VerificationStatus.PENDING:
+            return Response({
+                'code': 400,
+                'message': '该实名认证状态不是待审核，无法进行审核操作'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = serializer.validated_data
+
+        if validated_data['status'] == 'approved':
+            profile.status = VerificationStatus.APPROVED
+            profile.verified_at = timezone.now()
+        else:
+            profile.status = VerificationStatus.REJECTED
+            profile.reject_reason = validated_data.get('reject_reason', '')
+
+        profile.save()
+
+        detail_serializer = VerificationProfileSerializer(profile)
+        result = detail_serializer.data
+        result['user'] = {
+            'id': profile.user.id,
+            'username': profile.user.username,
+            'email': profile.user.email,
+        }
+        return Response({
+            'code': 200,
+            'message': f'实名认证审核已{"通过" if validated_data["status"] == "approved" else "拒绝"}',
+            'data': result
         })

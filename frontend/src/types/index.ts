@@ -16,6 +16,14 @@ export interface LoginResponse {
   user: User
 }
 
+export interface VerificationProfileUser {
+  id: number
+  username: string
+  email: string
+  role: string
+  role_display: string
+}
+
 export interface VerificationProfile {
   id: number
   profile_type: 'personal' | 'enterprise'
@@ -31,6 +39,12 @@ export interface VerificationProfile {
   reject_reason: string | null
   verified_at: string | null
   submitted_at: string
+  user?: VerificationProfileUser
+}
+
+export interface VerificationAuditForm {
+  status: 'approved' | 'rejected'
+  reject_reason?: string
 }
 
 export interface RegisterForm {

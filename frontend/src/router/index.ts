@@ -56,6 +56,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '项目审核', roles: ['auditor'] },
       },
       {
+        path: 'verification/audit',
+        name: 'VerificationAudit',
+        component: () => import('@/views/VerificationAudit.vue'),
+        meta: { title: '实名认证审核', roles: ['auditor'] },
+      },
+      {
         path: 'projects/:id',
         name: 'ProjectDetail',
         component: () => import('@/views/ProjectDetail.vue'),

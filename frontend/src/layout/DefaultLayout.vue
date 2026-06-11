@@ -5,7 +5,7 @@
         <div class="flex justify-between items-center h-16">
           <div class="flex items-center space-x-3 cursor-pointer" @click="$router.push('/')">
             <div class="text-love text-3xl love-heart">
-              <el-icon><HeartFilled /></el-icon>
+              <span class="inline-block">❤️</span>
             </div>
             <div>
               <h1 class="text-xl font-bold text-gray-800">爱心汇</h1>
@@ -74,7 +74,7 @@
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div class="flex flex-col md:flex-row justify-between items-center">
           <div class="flex items-center space-x-2 mb-4 md:mb-0">
-            <el-icon class="text-love text-xl"><HeartFilled /></el-icon>
+            <span class="text-love text-xl">❤️</span>
             <span class="text-gray-600 font-medium">爱心汇 LoveHub</span>
           </div>
           <p class="text-gray-500 text-sm">© 2024 爱心汇捐赠管理平台. 让爱心传递更远</p>
@@ -89,6 +89,10 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  CaretBottom, User, DocumentChecked, SwitchButton,
+  HomeFilled, UserFilled, CirclePlusFilled, FolderOpened, CircleCheckFilled
+} from '@element-plus/icons-vue'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -105,6 +109,7 @@ const menuItems = computed(() => {
   }
   if (userStore.isAuditor) {
     items.splice(1, 0, { path: '/projects/audit', name: '项目审核', icon: 'CircleCheckFilled' })
+    items.splice(2, 0, { path: '/verification/audit', name: '认证审核', icon: 'DocumentChecked' })
   }
   return items
 })

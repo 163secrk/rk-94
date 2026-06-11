@@ -10,11 +10,15 @@
 
     <div v-if="profile" class="bg-white rounded-xl p-6 card-shadow mb-6">
       <el-result
-        :icon="statusIcon"
         :title="statusTitle"
         :sub-title="statusSubtitle"
         :status="resultStatus"
       >
+        <template #icon>
+          <el-icon :class="statusIconClass" class="text-6xl">
+            <component :is="statusIcon" />
+          </el-icon>
+        </template>
         <template #extra>
           <div class="text-left space-y-3">
             <div class="flex items-center space-x-4">
@@ -208,13 +212,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, markRaw } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { getVerificationProfile, submitVerification } from '@/api/auth'
 import type { FormInstance, FormRules, UploadFile, UploadFiles } from 'element-plus'
 import type { VerificationProfile, PersonalVerificationForm, EnterpriseVerificationForm } from '@/types'
 import { ElMessage } from 'element-plus'
+import {
+  DocumentChecked, Edit, User, OfficeBuilding, Plus, Check,
+  InfoFilled, CircleCheckFilled, CircleCloseFilled, Clock
+} from '@element-plus/icons-vue'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -273,14 +281,26 @@ const resultStatus = computed(() => {
 })
 
 const statusIcon = computed(() => {
-  if (!profile.value) return 'InfoFilled'
+  if (!profile.value) return markRaw(InfoFilled)
   switch (profile.value.status) {
     case 'approved':
-      return 'CircleCheckFilled'
+      return markRaw(CircleCheckFilled)
     case 'rejected':
-      return 'CircleCloseFilled'
+      return markRaw(CircleCloseFilled)
     default:
-      return 'Clock'
+      return markRaw(Clock)
+  }
+})
+
+const statusIconClass = computed(() => {
+  if (!profile.value) return 'text-blue-500'
+  switch (profile.value.status) {
+    case 'approved':
+      return 'text-green-500'
+    case 'rejected':
+      return 'text-red-500'
+    default:
+      return 'text-yellow-500'
   }
 })
 
