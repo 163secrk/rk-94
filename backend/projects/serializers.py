@@ -70,8 +70,24 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
         ]
 
 
+class BudgetsJsonField(serializers.Field):
+    def to_internal_value(self, data):
+        if isinstance(data, str):
+            try:
+                parsed = json.loads(data)
+            except (json.JSONDecodeError, ValueError):
+                raise serializers.ValidationError('值必须是有效的 JSON 数据。')
+            data = parsed
+        if not isinstance(data, list):
+            raise serializers.ValidationError('预算数据必须是数组格式。')
+        return data
+
+    def to_representation(self, value):
+        return value
+
+
 class ProjectCreateSerializer(serializers.ModelSerializer):
-    budgets = serializers.JSONField(required=True, write_only=True)
+    budgets = BudgetsJsonField(required=True, write_only=True)
 
     class Meta:
         model = Project
@@ -79,15 +95,6 @@ class ProjectCreateSerializer(serializers.ModelSerializer):
             'title', 'category', 'description', 'detail_content',
             'cover_image', 'target_amount', 'deadline', 'budgets'
         ]
-
-    def to_internal_value(self, data):
-        budgets = data.get('budgets')
-        if budgets and isinstance(budgets, str):
-            try:
-                data['budgets'] = json.loads(budgets)
-            except (json.JSONDecodeError, ValueError):
-                raise serializers.ValidationError({'budgets': '预算数据格式错误'})
-        return super().to_internal_value(data)
 
     def validate_target_amount(self, value):
         if value <= 0:

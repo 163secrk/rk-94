@@ -299,7 +299,7 @@ const verifications = computed(() => {
   if (activeStatus.value === 'all') return allVerifications.value
   return allVerifications.value.filter(p => p.status === activeStatus.value)
 })
-const activeStatus = ref('pending')
+const activeStatus = ref('all')
 const detailDialogVisible = ref(false)
 const auditDialogVisible = ref(false)
 const auditLoading = ref(false)
