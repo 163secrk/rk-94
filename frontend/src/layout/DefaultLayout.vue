@@ -85,6 +85,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -92,10 +93,21 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const router = useRouter()
 const userStore = useUserStore()
 
-const menuItems = [
-  { path: '/', name: '首页', icon: 'HomeFilled' },
-  { path: '/verification', name: '实名认证', icon: 'DocumentChecked' },
-]
+const menuItems = computed(() => {
+  const items = [
+    { path: '/', name: '公益项目', icon: 'HomeFilled' },
+    { path: '/dashboard', name: '个人中心', icon: 'UserFilled' },
+    { path: '/verification', name: '实名认证', icon: 'DocumentChecked' },
+  ]
+  if (userStore.isInitiator) {
+    items.splice(1, 0, { path: '/projects/create', name: '发起项目', icon: 'CirclePlusFilled' })
+    items.splice(2, 0, { path: '/projects/my', name: '我的项目', icon: 'FolderOpened' })
+  }
+  if (userStore.isAuditor) {
+    items.splice(1, 0, { path: '/projects/audit', name: '项目审核', icon: 'CircleCheckFilled' })
+  }
+  return items
+})
 
 const handleCommand = (command: string) => {
   if (command === 'logout') {
@@ -109,7 +121,7 @@ const handleCommand = (command: string) => {
   } else if (command === 'verification') {
     router.push('/verification')
   } else if (command === 'profile') {
-    ElMessage.info('个人中心功能开发中')
+    router.push('/dashboard')
   }
 }
 </script>

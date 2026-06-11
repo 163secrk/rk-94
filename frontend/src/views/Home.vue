@@ -159,32 +159,49 @@ const stats = computed(() => [
   },
 ])
 
-const quickActions = [
-  {
+const quickActions = computed(() => {
+  const actions = [
+    {
+      name: '浏览项目',
+      icon: 'Search',
+      path: '/',
+      colorClass: 'from-blue-500 to-blue-400 hover:from-blue-600 hover:to-blue-500',
+    },
+  ]
+
+  if (userStore.isInitiator) {
+    actions.splice(1, 0, {
+      name: '发起项目',
+      icon: 'Plus',
+      path: '/projects/create',
+      colorClass: 'from-green-500 to-green-400 hover:from-green-600 hover:to-green-500',
+    })
+    actions.splice(2, 0, {
+      name: '我的项目',
+      icon: 'FolderOpened',
+      path: '/projects/my',
+      colorClass: 'from-purple-500 to-purple-400 hover:from-purple-600 hover:to-purple-500',
+    })
+  }
+
+  if (userStore.isAuditor) {
+    actions.splice(1, 0, {
+      name: '项目审核',
+      icon: 'CircleCheck',
+      path: '/projects/audit',
+      colorClass: 'from-orange-500 to-orange-400 hover:from-orange-600 hover:to-orange-500',
+    })
+  }
+
+  actions.push({
     name: '实名认证',
     icon: 'DocumentChecked',
     path: '/verification',
     colorClass: 'from-love to-love-light hover:from-love-dark hover:to-love',
-  },
-  {
-    name: '浏览项目',
-    icon: 'Search',
-    path: '/',
-    colorClass: 'from-blue-500 to-blue-400 hover:from-blue-600 hover:to-blue-500',
-  },
-  {
-    name: '发起项目',
-    icon: 'Plus',
-    path: '/',
-    colorClass: 'from-green-500 to-green-400 hover:from-green-600 hover:to-green-500',
-  },
-  {
-    name: '个人中心',
-    icon: 'User',
-    path: '/',
-    colorClass: 'from-purple-500 to-purple-400 hover:from-purple-600 hover:to-purple-500',
-  },
-]
+  })
+
+  return actions
+})
 
 const tips = [
   {

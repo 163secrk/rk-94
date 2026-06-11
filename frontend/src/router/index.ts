@@ -22,14 +22,44 @@ const routes: RouteRecordRaw[] = [
       {
         path: '',
         name: 'Home',
+        component: () => import('@/views/Projects.vue'),
+        meta: { title: '公益项目' },
+      },
+      {
+        path: 'dashboard',
+        name: 'Dashboard',
         component: () => import('@/views/Home.vue'),
-        meta: { title: '首页' },
+        meta: { title: '个人中心' },
       },
       {
         path: 'verification',
         name: 'Verification',
         component: () => import('@/views/Verification.vue'),
         meta: { title: '实名认证' },
+      },
+      {
+        path: 'projects/create',
+        name: 'ProjectCreate',
+        component: () => import('@/views/ProjectCreate.vue'),
+        meta: { title: '发起项目', roles: ['initiator'] },
+      },
+      {
+        path: 'projects/my',
+        name: 'MyProjects',
+        component: () => import('@/views/MyProjects.vue'),
+        meta: { title: '我的项目', roles: ['initiator'] },
+      },
+      {
+        path: 'projects/audit',
+        name: 'ProjectAudit',
+        component: () => import('@/views/ProjectAudit.vue'),
+        meta: { title: '项目审核', roles: ['auditor'] },
+      },
+      {
+        path: 'projects/:id',
+        name: 'ProjectDetail',
+        component: () => import('@/views/ProjectDetail.vue'),
+        meta: { title: '项目详情' },
       },
     ],
   },
@@ -53,6 +83,13 @@ router.beforeEach((to, _from, next) => {
     next({ path: '/login', query: { redirect: to.fullPath } })
   } else if ((to.path === '/login' || to.path === '/register') && userStore.isLoggedIn) {
     next('/')
+  } else if (to.meta.roles && Array.isArray(to.meta.roles)) {
+    const userRole = userStore.userInfo?.role
+    if (!userRole || !(to.meta.roles as string[]).includes(userRole)) {
+      next('/')
+    } else {
+      next()
+    }
   } else {
     next()
   }

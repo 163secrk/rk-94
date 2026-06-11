@@ -64,3 +64,83 @@ export interface EnterpriseVerificationForm {
 }
 
 export type VerificationForm = PersonalVerificationForm | EnterpriseVerificationForm
+
+export type ProjectCategory = 'education' | 'medical' | 'disaster' | 'poverty' | 'environment' | 'animal' | 'elderly' | 'children' | 'other'
+
+export type ProjectStatus = 'pending' | 'approved' | 'rejected' | 'funding' | 'completed'
+
+export const PROJECT_CATEGORY_OPTIONS: { value: ProjectCategory; label: string }[] = [
+  { value: 'education', label: '教育助学' },
+  { value: 'medical', label: '医疗救助' },
+  { value: 'disaster', label: '灾害救援' },
+  { value: 'poverty', label: '扶贫济困' },
+  { value: 'environment', label: '环境保护' },
+  { value: 'animal', label: '动物保护' },
+  { value: 'elderly', label: '关爱老人' },
+  { value: 'children', label: '关爱儿童' },
+  { value: 'other', label: '其他公益' },
+]
+
+export const PROJECT_STATUS_OPTIONS: { value: ProjectStatus; label: string }[] = [
+  { value: 'pending', label: '待审核' },
+  { value: 'approved', label: '已通过' },
+  { value: 'rejected', label: '已拒绝' },
+  { value: 'funding', label: '募集中' },
+  { value: 'completed', label: '已完成' },
+]
+
+export interface ProjectBudget {
+  id?: number
+  category: string
+  description?: string
+  amount: string | number
+  quantity: number
+  unit?: string
+  subtotal?: string | number
+}
+
+export interface ProjectInitiator {
+  id: number
+  username: string
+  email: string
+  avatar: string | null
+}
+
+export interface Project {
+  id: number
+  title: string
+  category: ProjectCategory
+  category_display: string
+  description: string
+  detail_content?: string
+  cover_image: string | null
+  target_amount: string | number
+  current_amount: string | number
+  progress_percentage: number
+  deadline: string
+  status: ProjectStatus
+  status_display: string
+  reject_reason?: string
+  initiator: ProjectInitiator
+  budgets?: ProjectBudget[]
+  budget_total?: string | number
+  audited_at?: string
+  created_at: string
+  updated_at?: string
+}
+
+export interface ProjectCreateForm {
+  title: string
+  category: ProjectCategory
+  description: string
+  detail_content: string
+  cover_image: File | null
+  target_amount: string | number
+  deadline: string
+  budgets: ProjectBudget[]
+}
+
+export interface ProjectAuditForm {
+  status: 'approved' | 'rejected'
+  reject_reason?: string
+}
