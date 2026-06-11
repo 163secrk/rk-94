@@ -154,6 +154,42 @@ export interface ProjectCreateForm {
   budgets: ProjectBudget[]
 }
 
+export type DonationStatus = 'pending' | 'paid' | 'failed' | 'refunded'
+
+export interface DonationProject {
+  id: number
+  title: string
+  cover_image: string | null
+}
+
+export interface DonationDonor {
+  id: number
+  username: string
+  avatar: string | null
+}
+
+export interface Donation {
+  id: number
+  order_no: string
+  user: DonationDonor
+  project: DonationProject
+  amount: string | number
+  status: DonationStatus
+  status_display: string
+  message: string | null
+  paid_at: string | null
+  refunded_at: string | null
+  transaction_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DonationCreateForm {
+  project: number
+  amount: number
+  message?: string
+}
+
 export interface ProjectAuditForm {
   status: 'approved' | 'rejected'
   reject_reason?: string

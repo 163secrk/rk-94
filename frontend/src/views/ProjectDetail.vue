@@ -171,6 +171,7 @@
               type="primary"
               size="large"
               class="w-full mt-6 h-14 !bg-love !border-love text-lg hover:!bg-love-dark"
+              @click="openDonationDialog"
             >
               <el-icon class="mr-2 text-xl"><Cherry /></el-icon>
               立即捐赠
@@ -228,22 +229,104 @@
     </template>
 
     <el-empty v-else-if="!loading" description="项目不存在或暂无权限查看" />
+
+    <el-dialog
+      v-model="donationDialogVisible"
+      title="捐赠支持"
+      width="500px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-form
+        ref="donationFormRef"
+        :model="donationForm"
+        :rules="donationRules"
+        label-width="100px"
+        label-position="top"
+      >
+        <el-form-item label="捐赠金额（元）" prop="amount">
+          <el-input-number
+            v-model="donationForm.amount"
+            :min="1"
+            :max="remainingAmount"
+            :precision="2"
+            :step="10"
+            controls-position="right"
+            class="w-full"
+            size="large"
+          />
+        </el-form-item>
+        <div class="flex gap-2 mb-4">
+          <el-button
+            v-for="preset in presetAmounts"
+            :key="preset"
+            :type="donationForm.amount === preset ? 'primary' : 'default'"
+            size="small"
+            @click="donationForm.amount = preset"
+          >
+            ¥{{ preset }}
+          </el-button>
+        </div>
+        <el-form-item label="留言（选填）" prop="message">
+          <el-input
+            v-model="donationForm.message"
+            type="textarea"
+            :rows="3"
+            maxlength="200"
+            show-word-limit
+            placeholder="写下您的祝福或鼓励..."
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="donationDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="donationSubmitting"
+          class="!bg-love !border-love hover:!bg-love-dark"
+          @click="submitDonation"
+        >
+          确认捐赠 ¥{{ formatNumber(donationForm.amount) }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
-import { getProjectDetail } from '@/api/projects'
-import type { Project } from '@/types'
+import { ref, computed, onMounted, reactive } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { getProjectDetail, createDonation, simulatePayment } from '@/api/projects'
+import { useUserStore } from '@/stores/user'
+import type { Project, DonationCreateForm } from '@/types'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import {
   Collection, WarningFilled, Clock, Calendar, Timer, Document, Money,
   Cherry, CircleCheck, CircleClose
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
+const router = useRouter()
+const userStore = useUserStore()
 const loading = ref(false)
 const project = ref<Project | null>(null)
+
+const donationDialogVisible = ref(false)
+const donationSubmitting = ref(false)
+const donationFormRef = ref<FormInstance>()
+const donationForm = reactive<DonationCreateForm>({
+  project: 0,
+  amount: 50,
+  message: '',
+})
+
+const presetAmounts = [10, 50, 100, 500]
+
+const donationRules: FormRules = {
+  amount: [
+    { required: true, message: '请输入捐赠金额', trigger: 'blur' },
+  ],
+}
 
 const remainingAmount = computed(() => {
   if (!project.value) return 0
@@ -286,6 +369,47 @@ const formatDate = (dateStr: string) => {
 
 const formatDateTime = (dateStr: string) => {
   return new Date(dateStr).toLocaleString('zh-CN')
+}
+
+const openDonationDialog = () => {
+  if (!userStore.isLoggedIn) {
+    ElMessage.warning('请先登录后再进行捐赠')
+    router.push({ path: '/login', query: { redirect: route.fullPath } })
+    return
+  }
+  if (!project.value) return
+  donationForm.project = project.value.id
+  donationForm.amount = 50
+  donationForm.message = ''
+  donationDialogVisible.value = true
+}
+
+const submitDonation = async () => {
+  if (!donationFormRef.value) return
+  await donationFormRef.value.validate()
+
+  donationSubmitting.value = true
+  try {
+    const res = await createDonation({
+      project: donationForm.project,
+      amount: donationForm.amount,
+      message: donationForm.message || undefined,
+    })
+    donationDialogVisible.value = false
+
+    const donation = res.donation
+    const payRes = await simulatePayment(donation.id)
+    if (payRes.status === 'paid') {
+      ElMessage.success('支付成功，感谢您的捐赠！')
+    } else {
+      ElMessage.warning('支付未成功，请稍后重试')
+    }
+    fetchDetail()
+  } catch (error) {
+    console.error('Donation error:', error)
+  } finally {
+    donationSubmitting.value = false
+  }
 }
 
 const fetchDetail = async () => {

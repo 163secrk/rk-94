@@ -1,5 +1,5 @@
 import request from '@/utils/request'
-import type { Project, ProjectCreateForm, ProjectAuditForm } from '@/types'
+import type { Project, ProjectCreateForm, ProjectAuditForm, Donation, DonationCreateForm } from '@/types'
 
 export const getPublicProjects = (category?: string) => {
   const params = category ? { category } : {}
@@ -28,4 +28,16 @@ export const createProject = (data: FormData) => {
 
 export const auditProject = (id: number, data: ProjectAuditForm) => {
   return request.post<any, Project>(`/projects/${id}/audit/`, data)
+}
+
+export const createDonation = (data: DonationCreateForm) => {
+  return request.post<any, { donation: Donation; payment_url: string }>('/projects/donations/', data)
+}
+
+export const simulatePayment = (donationId: number) => {
+  return request.post<any, Donation>(`/projects/donations/${donationId}/pay/`)
+}
+
+export const getProjectDonations = (projectId: number) => {
+  return request.get<any, Donation[]>(`/projects/${projectId}/donations/`)
 }
