@@ -1,6 +1,8 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.contrib.auth import get_user_model
+from django.db import transaction
+from decimal import Decimal
 
 User = get_user_model()
 
@@ -23,6 +25,13 @@ class ProjectCategory(models.TextChoices):
     ELDERLY = 'elderly', _('关爱老人')
     CHILDREN = 'children', _('关爱儿童')
     OTHER = 'other', _('其他公益')
+
+
+class DonationStatus(models.TextChoices):
+    PENDING = 'pending', _('待支付')
+    PAID = 'paid', _('已支付')
+    FAILED = 'failed', _('支付失败')
+    REFUNDED = 'refunded', _('已退款')
 
 
 class Project(models.Model):
@@ -109,3 +118,89 @@ class ProjectBudget(models.Model):
     @property
     def subtotal(self):
         return self.amount * self.quantity
+
+
+class Donation(models.Model):
+    STATUS_TRANSITIONS = {
+        DonationStatus.PENDING: [DonationStatus.PAID, DonationStatus.FAILED],
+        DonationStatus.PAID: [DonationStatus.REFUNDED],
+        DonationStatus.FAILED: [],
+        DonationStatus.REFUNDED: [],
+    }
+
+    order_no = models.CharField(max_length=32, unique=True, verbose_name='订单号')
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='donations',
+        verbose_name='捐赠人'
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='donations',
+        verbose_name='所属项目'
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='捐赠金额（元）')
+    status = models.CharField(
+        max_length=20,
+        choices=DonationStatus.choices,
+        default=DonationStatus.PENDING,
+        verbose_name='捐赠状态'
+    )
+    message = models.CharField(max_length=500, blank=True, null=True, verbose_name='留言')
+    paid_at = models.DateTimeField(blank=True, null=True, verbose_name='支付时间')
+    refunded_at = models.DateTimeField(blank=True, null=True, verbose_name='退款时间')
+    transaction_id = models.CharField(max_length=64, blank=True, null=True, verbose_name='交易流水号')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '捐赠记录'
+        verbose_name_plural = verbose_name
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.order_no} - {self.user.username} - {self.amount}元'
+
+    def can_transition_to(self, new_status):
+        return new_status in self.STATUS_TRANSITIONS.get(self.status, [])
+
+    @transaction.atomic
+    def update_status(self, new_status, transaction_id=None):
+        from django.utils import timezone
+
+        if not self.can_transition_to(new_status):
+            raise ValueError(
+                f'无法从状态 {self.get_status_display()} 转换到 {dict(DonationStatus.choices)[new_status]}'
+            )
+
+        old_status = self.status
+        self.status = new_status
+
+        if new_status == DonationStatus.PAID:
+            self.paid_at = timezone.now()
+            if transaction_id:
+                self.transaction_id = transaction_id
+            self._update_project_amount(self.amount)
+        elif new_status == DonationStatus.REFUNDED:
+            self.refunded_at = timezone.now()
+            if old_status == DonationStatus.PAID:
+                self._update_project_amount(-self.amount)
+
+        self.save()
+        return self
+
+    def _update_project_amount(self, delta):
+        project = Project.objects.select_for_update().get(pk=self.project_id)
+        project.current_amount = models.F('current_amount') + delta
+        project.save()
+        project.refresh_from_db()
+
+        if project.current_amount >= project.target_amount and project.status == ProjectStatus.FUNDING:
+            project.status = ProjectStatus.COMPLETED
+            project.save()
+
+    @transaction.atomic
+    def refund(self):
+        return self.update_status(DonationStatus.REFUNDED)

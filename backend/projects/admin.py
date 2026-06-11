@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Project, ProjectBudget
+from .models import Project, ProjectBudget, Donation
 
 
 class ProjectBudgetInline(admin.TabularInline):
@@ -36,3 +36,23 @@ class ProjectBudgetAdmin(admin.ModelAdmin):
     list_display = ['project', 'category', 'amount', 'quantity', 'unit', 'subtotal']
     list_filter = ['project__category']
     search_fields = ['project__title', 'category', 'description']
+
+
+@admin.register(Donation)
+class DonationAdmin(admin.ModelAdmin):
+    list_display = ['order_no', 'user', 'project', 'amount', 'status', 'paid_at', 'created_at']
+    list_filter = ['status', 'created_at', 'paid_at']
+    search_fields = ['order_no', 'user__username', 'project__title', 'transaction_id']
+    readonly_fields = ['order_no', 'created_at', 'updated_at', 'paid_at', 'refunded_at', 'transaction_id']
+    fieldsets = (
+        ('基本信息', {
+            'fields': ('order_no', 'user', 'project', 'amount', 'message')
+        }),
+        ('状态信息', {
+            'fields': ('status', 'paid_at', 'refunded_at', 'transaction_id')
+        }),
+        ('时间信息', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
