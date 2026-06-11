@@ -1,10 +1,14 @@
-from rest_framework import generics, status, permissions, views
+from rest_framework import generics, status, permissions, views, parsers
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from django.utils import timezone
 from django.db import transaction
 from decimal import Decimal, InvalidOperation
-from .models import Project, ProjectStatus, Donation, DonationStatus, RefundRequest, RefundRequestStatus
+from .models import (
+    Project, ProjectStatus, Donation, DonationStatus,
+    RefundRequest, RefundRequestStatus,
+    Expenditure, ExpenditureInvoice, DonationExpenditure
+)
 from .serializers import (
     ProjectListSerializer,
     ProjectDetailSerializer,
@@ -17,7 +21,16 @@ from .serializers import (
     RefundRequestCreateSerializer,
     RefundRequestReviewSerializer,
     RefundRequestListSerializer,
-    RefundPreviewSerializer
+    RefundPreviewSerializer,
+    ExpenditureListSerializer,
+    ExpenditureDetailSerializer,
+    ExpenditureCreateSerializer,
+    ExpenditureInvoiceSerializer,
+    ExpenditureInvoiceCreateSerializer,
+    DonationExpenditureCreateSerializer,
+    DonationExpenditureDetailSerializer,
+    DonationTrackingSerializer,
+    ProjectExpenditureSummarySerializer
 )
 
 
@@ -550,6 +563,199 @@ class ProjectDonationListView(generics.ListAPIView):
         if page is not None:
             serializer = self.get_serializer(page, many=True)
             return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class IsAdminOrAuditor(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role in ['auditor', 'admin']
+
+
+class ExpenditureListView(generics.ListAPIView):
+    serializer_class = ExpenditureListSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        project_id = self.kwargs.get('project_id')
+        queryset = Expenditure.objects.all()
+        if project_id:
+            queryset = queryset.filter(project_id=project_id)
+        if not (self.request.user.role in ['auditor', 'admin']):
+            queryset = queryset.filter(project__initiator=self.request.user)
+        return queryset.order_by('-expenditure_date', '-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        expenditure_type = request.query_params.get('expenditure_type')
+        if expenditure_type:
+            queryset = queryset.filter(expenditure_type=expenditure_type)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class ExpenditureCreateView(generics.CreateAPIView):
+    serializer_class = ExpenditureCreateSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrAuditor]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        expenditure = serializer.save(operator=request.user)
+        project = expenditure.project
+        project.used_amount = min(
+            project.used_amount + expenditure.amount,
+            project.current_amount
+        )
+        project.save()
+        detail_serializer = ExpenditureDetailSerializer(expenditure)
+        return Response({
+            'code': 200,
+            'message': '支出记录创建成功',
+            'data': detail_serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+
+class ExpenditureDetailView(generics.RetrieveAPIView):
+    serializer_class = ExpenditureDetailSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Expenditure.objects.all()
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if not (request.user.role in ['auditor', 'admin']) and instance.project.initiator != request.user:
+            return Response({
+                'code': 403,
+                'message': '无权查看该支出记录'
+            }, status=status.HTTP_403_FORBIDDEN)
+        serializer = self.get_serializer(instance)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class ExpenditureInvoiceUploadView(generics.CreateAPIView):
+    serializer_class = ExpenditureInvoiceCreateSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrAuditor]
+    parser_classes = [parsers.MultiPartParser, parsers.FormParser]
+
+    def create(self, request, *args, **kwargs):
+        expenditure_id = self.kwargs.get('expenditure_id')
+        try:
+            expenditure = Expenditure.objects.get(id=expenditure_id)
+        except Expenditure.DoesNotExist:
+            return Response({
+                'code': 404,
+                'message': '支出记录不存在'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        invoice = serializer.save(
+            expenditure=expenditure,
+            uploaded_by=request.user
+        )
+        detail_serializer = ExpenditureInvoiceSerializer(invoice)
+        return Response({
+            'code': 200,
+            'message': '发票上传成功',
+            'data': detail_serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+
+class DonationExpenditureAllocateView(generics.CreateAPIView):
+    serializer_class = DonationExpenditureCreateSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrAuditor]
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        allocation = serializer.save(allocated_by=request.user)
+        detail_serializer = DonationExpenditureDetailSerializer(allocation)
+        return Response({
+            'code': 200,
+            'message': '捐款分配成功',
+            'data': detail_serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+
+class DonationTrackingView(generics.RetrieveAPIView):
+    serializer_class = DonationTrackingSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Donation.objects.all()
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.user != request.user and request.user.role not in ['auditor', 'admin']:
+            return Response({
+                'code': 403,
+                'message': '无权查看该捐赠记录的追踪信息'
+            }, status=status.HTTP_403_FORBIDDEN)
+        serializer = self.get_serializer(instance)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class ProjectExpenditureSummaryView(generics.RetrieveAPIView):
+    serializer_class = ProjectExpenditureSummarySerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Project.objects.all()
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if not (request.user.role in ['auditor', 'admin']) and instance.initiator != request.user:
+            return Response({
+                'code': 403,
+                'message': '无权查看该项目的支出汇总'
+            }, status=status.HTTP_403_FORBIDDEN)
+        serializer = self.get_serializer(instance)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class AvailableDonationsForAllocationView(generics.ListAPIView):
+    serializer_class = DonationListSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrAuditor]
+
+    def get_queryset(self):
+        expenditure_id = self.kwargs.get('expenditure_id')
+        try:
+            expenditure = Expenditure.objects.get(id=expenditure_id)
+        except Expenditure.DoesNotExist:
+            return Donation.objects.none()
+
+        allocated_ids = DonationExpenditure.objects.filter(
+            expenditure=expenditure
+        ).values_list('donation_id', flat=True)
+
+        return Donation.objects.filter(
+            project=expenditure.project,
+            status=DonationStatus.PAID
+        ).exclude(id__in=allocated_ids).order_by('-paid_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
         serializer = self.get_serializer(queryset, many=True)
         return Response({
             'code': 200,

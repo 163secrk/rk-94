@@ -67,6 +67,30 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/ProjectDetail.vue'),
         meta: { title: '项目详情' },
       },
+      {
+        path: 'expenditures',
+        name: 'ExpenditureList',
+        component: () => import('@/views/ExpenditureList.vue'),
+        meta: { title: '支出记录' },
+      },
+      {
+        path: 'expenditures/create',
+        name: 'ExpenditureCreate',
+        component: () => import('@/views/ExpenditureCreate.vue'),
+        meta: { title: '登记支出', roles: ['auditor'] },
+      },
+      {
+        path: 'expenditures/:id',
+        name: 'ExpenditureDetail',
+        component: () => import('@/views/ExpenditureDetail.vue'),
+        meta: { title: '支出详情' },
+      },
+      {
+        path: 'donations/:id/tracking',
+        name: 'DonationTracking',
+        component: () => import('@/views/DonationTracking.vue'),
+        meta: { title: '捐款追踪' },
+      },
     ],
   },
   {

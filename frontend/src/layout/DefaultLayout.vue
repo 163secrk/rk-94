@@ -19,7 +19,7 @@
               :key="item.path"
               :to="item.path"
               class="text-gray-600 hover:text-love transition-colors duration-200 font-medium"
-              :class="{ 'text-love': $route.path === item.path }"
+              :class="{ 'text-love': $route.path === item.path || $route.path.startsWith(item.path + '/') }"
             >
               <el-icon class="mr-1"><component :is="item.icon" /></el-icon>
               {{ item.name }}
@@ -91,7 +91,8 @@ import { useUserStore } from '@/stores/user'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   CaretBottom, User, DocumentChecked, SwitchButton,
-  HomeFilled, UserFilled, CirclePlusFilled, FolderOpened, CircleCheckFilled
+  HomeFilled, UserFilled, CirclePlusFilled, FolderOpened, CircleCheckFilled,
+  Money, Goods
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -102,6 +103,7 @@ const menuItems = computed(() => {
     { path: '/', name: '公益项目', icon: 'HomeFilled' },
     { path: '/dashboard', name: '个人中心', icon: 'UserFilled' },
     { path: '/verification', name: '实名认证', icon: 'DocumentChecked' },
+    { path: '/expenditures', name: '支出记录', icon: 'Money' },
   ]
   if (userStore.isInitiator) {
     items.splice(1, 0, { path: '/projects/create', name: '发起项目', icon: 'CirclePlusFilled' })
@@ -110,6 +112,7 @@ const menuItems = computed(() => {
   if (userStore.isAuditor) {
     items.splice(1, 0, { path: '/projects/audit', name: '项目审核', icon: 'CircleCheckFilled' })
     items.splice(2, 0, { path: '/verification/audit', name: '认证审核', icon: 'DocumentChecked' })
+    items.splice(3, 0, { path: '/expenditures/create', name: '登记支出', icon: 'Goods' })
   }
   return items
 })

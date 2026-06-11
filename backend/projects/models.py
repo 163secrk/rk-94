@@ -316,6 +316,126 @@ class Donation(models.Model):
         }
 
 
+class ExpenditureType(models.TextChoices):
+    MATERIAL = 'material', _('物料采购')
+    CASH = 'cash', _('现金发放')
+    SERVICE = 'service', _('服务采购')
+    OTHER = 'other', _('其他支出')
+
+
+class Expenditure(models.Model):
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='expenditures',
+        verbose_name='所属项目'
+    )
+    expenditure_type = models.CharField(
+        max_length=20,
+        choices=ExpenditureType.choices,
+        default=ExpenditureType.OTHER,
+        verbose_name='支出类型'
+    )
+    title = models.CharField(max_length=200, verbose_name='支出标题')
+    description = models.TextField(verbose_name='支出说明')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='支出金额（元）')
+    expenditure_date = models.DateField(verbose_name='支出日期')
+    recipient = models.CharField(max_length=200, verbose_name='收款方/接收人')
+    operator = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='operated_expenditures',
+        verbose_name='经办人'
+    )
+    remark = models.TextField(blank=True, null=True, verbose_name='备注')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '支出记录'
+        verbose_name_plural = verbose_name
+        ordering = ['-expenditure_date', '-created_at']
+
+    def __str__(self):
+        return f'{self.project.title} - {self.title} - {self.amount}元'
+
+    @property
+    def allocated_amount(self):
+        return self.donation_allocations.aggregate(total=models.Sum('amount'))['total'] or Decimal('0')
+
+    @property
+    def invoices_total(self):
+        return self.invoices.aggregate(total=models.Sum('amount'))['total'] or Decimal('0')
+
+
+class ExpenditureInvoice(models.Model):
+    expenditure = models.ForeignKey(
+        Expenditure,
+        on_delete=models.CASCADE,
+        related_name='invoices',
+        verbose_name='所属支出'
+    )
+    invoice_no = models.CharField(max_length=100, blank=True, null=True, verbose_name='发票号码')
+    invoice_file = models.FileField(upload_to='invoices/', verbose_name='发票文件')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='发票金额（元）')
+    issued_date = models.DateField(blank=True, null=True, verbose_name='开票日期')
+    issuer = models.CharField(max_length=200, blank=True, null=True, verbose_name='开票方')
+    remark = models.TextField(blank=True, null=True, verbose_name='备注')
+    uploaded_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='uploaded_invoices',
+        verbose_name='上传人'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+
+    class Meta:
+        verbose_name = '支出发票'
+        verbose_name_plural = verbose_name
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.expenditure.title} - 发票 - {self.amount}元'
+
+
+class DonationExpenditure(models.Model):
+    donation = models.ForeignKey(
+        Donation,
+        on_delete=models.CASCADE,
+        related_name='expenditure_allocations',
+        verbose_name='关联捐赠'
+    )
+    expenditure = models.ForeignKey(
+        Expenditure,
+        on_delete=models.CASCADE,
+        related_name='donation_allocations',
+        verbose_name='关联支出'
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='分配金额（元）')
+    allocated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='allocated_donations',
+        verbose_name='分配人'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+
+    class Meta:
+        verbose_name = '捐款支出分配'
+        verbose_name_plural = verbose_name
+        ordering = ['-created_at']
+        unique_together = [['donation', 'expenditure']]
+
+    def __str__(self):
+        return f'{self.donation.order_no} -> {self.expenditure.title} ({self.amount}元)'
+
+
 class RefundRequest(models.Model):
     donation = models.OneToOneField(
         Donation,

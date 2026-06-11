@@ -81,7 +81,7 @@ export type VerificationForm = PersonalVerificationForm | EnterpriseVerification
 
 export type ProjectCategory = 'education' | 'medical' | 'disaster' | 'poverty' | 'environment' | 'animal' | 'elderly' | 'children' | 'other'
 
-export type ProjectStatus = 'pending' | 'approved' | 'rejected' | 'funding' | 'completed'
+export type ProjectStatus = 'pending' | 'approved' | 'rejected' | 'funding' | 'executing' | 'completed'
 
 export const PROJECT_CATEGORY_OPTIONS: { value: ProjectCategory; label: string }[] = [
   { value: 'education', label: '教育助学' },
@@ -100,6 +100,7 @@ export const PROJECT_STATUS_OPTIONS: { value: ProjectStatus; label: string }[] =
   { value: 'approved', label: '已通过' },
   { value: 'rejected', label: '已拒绝' },
   { value: 'funding', label: '募集中' },
+  { value: 'executing', label: '执行中' },
   { value: 'completed', label: '已完成' },
 ]
 
@@ -193,4 +194,117 @@ export interface DonationCreateForm {
 export interface ProjectAuditForm {
   status: 'approved' | 'rejected'
   reject_reason?: string
+}
+
+export type ExpenditureType = 'material' | 'cash' | 'service' | 'other'
+
+export const EXPENDITURE_TYPE_OPTIONS: { value: ExpenditureType; label: string }[] = [
+  { value: 'material', label: '物料采购' },
+  { value: 'cash', label: '现金发放' },
+  { value: 'service', label: '服务采购' },
+  { value: 'other', label: '其他支出' },
+]
+
+export interface ExpenditureInvoice {
+  id: number
+  invoice_no: string | null
+  invoice_file: string
+  amount: string | number
+  issued_date: string | null
+  issuer: string | null
+  remark: string | null
+  created_at: string
+}
+
+export interface DonationAllocation {
+  id: number
+  donation_order_no: string
+  donor_username: string
+  donor_avatar: string | null
+  donation_amount: string | number
+  amount: string | number
+  created_at: string
+}
+
+export interface Expenditure {
+  id: number
+  project: number
+  project_title: string
+  expenditure_type: ExpenditureType
+  expenditure_type_display: string
+  title: string
+  description: string
+  amount: string | number
+  allocated_amount: string | number
+  invoices_total: string | number
+  expenditure_date: string
+  recipient: string
+  operator_name: string | null
+  remark: string | null
+  invoices?: ExpenditureInvoice[]
+  donation_allocations?: DonationAllocation[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ExpenditureCreateForm {
+  project: number
+  expenditure_type: ExpenditureType
+  title: string
+  description: string
+  amount: number
+  expenditure_date: string
+  recipient: string
+  remark?: string
+}
+
+export interface ExpenditureInvoiceCreateForm {
+  invoice_no?: string
+  invoice_file: File
+  amount: number
+  issued_date?: string
+  issuer?: string
+  remark?: string
+}
+
+export interface DonationAllocationCreateForm {
+  donation: number
+  expenditure: number
+  amount: number
+}
+
+export interface DonationAllocationDetail {
+  id: number
+  donation_order_no: string
+  donor_username: string
+  expenditure_id: number
+  expenditure_title: string
+  expenditure_type: ExpenditureType
+  expenditure_type_display: string
+  project_title: string
+  amount: string | number
+  allocated_by_name: string | null
+  created_at: string
+}
+
+export interface DonationTracking {
+  id: number
+  order_no: string
+  amount: string | number
+  status: DonationStatus
+  status_display: string
+  total_allocated: string | number
+  expenditure_allocations: DonationAllocationDetail[]
+  paid_at: string | null
+  created_at: string
+}
+
+export interface ProjectExpenditureSummary {
+  id: number
+  title: string
+  current_amount: string | number
+  used_amount: string | number
+  total_expenditure: string | number
+  total_allocated: string | number
+  expenditures: Expenditure[]
 }

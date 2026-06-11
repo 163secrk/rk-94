@@ -1,8 +1,13 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from django.db import models as db_models
 from decimal import Decimal
 import json
-from .models import Project, ProjectBudget, ProjectStatus, ProjectCategory, Donation, DonationStatus, RefundRequest, RefundRequestStatus
+from .models import (
+    Project, ProjectBudget, ProjectStatus, ProjectCategory,
+    Donation, DonationStatus, RefundRequest, RefundRequestStatus,
+    Expenditure, ExpenditureInvoice, DonationExpenditure, ExpenditureType
+)
 
 User = get_user_model()
 
@@ -306,3 +311,174 @@ class RefundPreviewSerializer(serializers.Serializer):
     actual_refund = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
     execution_ratio = serializers.DecimalField(max_digits=6, decimal_places=4, required=False)
     project_status = serializers.CharField(required=False)
+
+
+class ExpenditureInvoiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExpenditureInvoice
+        fields = ['id', 'invoice_no', 'invoice_file', 'amount', 'issued_date', 'issuer', 'remark', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class ExpenditureInvoiceCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExpenditureInvoice
+        fields = ['invoice_no', 'invoice_file', 'amount', 'issued_date', 'issuer', 'remark']
+
+
+class DonationAllocationInfoSerializer(serializers.ModelSerializer):
+    donation_order_no = serializers.CharField(source='donation.order_no', read_only=True)
+    donor_username = serializers.CharField(source='donation.user.username', read_only=True)
+    donor_avatar = serializers.CharField(source='donation.user.avatar', read_only=True, allow_null=True)
+    donation_amount = serializers.DecimalField(source='donation.amount', max_digits=12, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = DonationExpenditure
+        fields = ['id', 'donation_order_no', 'donor_username', 'donor_avatar', 'donation_amount', 'amount', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class ExpenditureListSerializer(serializers.ModelSerializer):
+    expenditure_type_display = serializers.CharField(source='get_expenditure_type_display', read_only=True)
+    allocated_amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    invoices_total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    project_title = serializers.CharField(source='project.title', read_only=True)
+    operator_name = serializers.CharField(source='operator.username', read_only=True, allow_null=True)
+
+    class Meta:
+        model = Expenditure
+        fields = [
+            'id', 'project', 'project_title', 'expenditure_type', 'expenditure_type_display',
+            'title', 'description', 'amount', 'allocated_amount', 'invoices_total',
+            'expenditure_date', 'recipient', 'operator_name', 'remark', 'created_at', 'updated_at'
+        ]
+
+
+class ExpenditureDetailSerializer(serializers.ModelSerializer):
+    expenditure_type_display = serializers.CharField(source='get_expenditure_type_display', read_only=True)
+    allocated_amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    invoices_total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    project_title = serializers.CharField(source='project.title', read_only=True)
+    operator_name = serializers.CharField(source='operator.username', read_only=True, allow_null=True)
+    invoices = ExpenditureInvoiceSerializer(many=True, read_only=True)
+    donation_allocations = DonationAllocationInfoSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Expenditure
+        fields = [
+            'id', 'project', 'project_title', 'expenditure_type', 'expenditure_type_display',
+            'title', 'description', 'amount', 'allocated_amount', 'invoices_total',
+            'expenditure_date', 'recipient', 'operator_name', 'remark',
+            'invoices', 'donation_allocations', 'created_at', 'updated_at'
+        ]
+
+
+class ExpenditureCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Expenditure
+        fields = [
+            'project', 'expenditure_type', 'title', 'description',
+            'amount', 'expenditure_date', 'recipient', 'remark'
+        ]
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('支出金额必须大于0')
+        return value
+
+    def validate_project(self, value):
+        if value.status not in [ProjectStatus.EXECUTING, ProjectStatus.COMPLETED]:
+            raise serializers.ValidationError('只有执行中或已完成的项目才能登记支出')
+        return value
+
+
+class DonationExpenditureCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DonationExpenditure
+        fields = ['donation', 'expenditure', 'amount']
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('分配金额必须大于0')
+        return value
+
+    def validate(self, attrs):
+        donation = attrs.get('donation')
+        expenditure = attrs.get('expenditure')
+        amount = attrs.get('amount')
+
+        if donation.project_id != expenditure.project_id:
+            raise serializers.ValidationError('捐赠和支出必须属于同一个项目')
+
+        if donation.status != DonationStatus.PAID:
+            raise serializers.ValidationError('只有已支付的捐赠才能进行分配')
+
+        total_allocated = DonationExpenditure.objects.filter(donation=donation).aggregate(
+            total=db_models.Sum('amount')
+        )['total'] or Decimal('0')
+
+        if self.instance:
+            total_allocated -= self.instance.amount
+
+        if total_allocated + amount > donation.amount:
+            raise serializers.ValidationError({'amount': '分配金额超出该捐赠的剩余可分配金额'})
+
+        return attrs
+
+
+class DonationExpenditureDetailSerializer(serializers.ModelSerializer):
+    donation_order_no = serializers.CharField(source='donation.order_no', read_only=True)
+    donor_username = serializers.CharField(source='donation.user.username', read_only=True)
+    expenditure_id = serializers.IntegerField(source='expenditure.id', read_only=True)
+    expenditure_title = serializers.CharField(source='expenditure.title', read_only=True)
+    expenditure_type = serializers.CharField(source='expenditure.expenditure_type', read_only=True)
+    expenditure_type_display = serializers.CharField(source='expenditure.get_expenditure_type_display', read_only=True)
+    project_title = serializers.CharField(source='expenditure.project.title', read_only=True)
+    allocated_by_name = serializers.CharField(source='allocated_by.username', read_only=True, allow_null=True)
+
+    class Meta:
+        model = DonationExpenditure
+        fields = [
+            'id', 'donation_order_no', 'donor_username', 'expenditure_id', 'expenditure_title',
+            'expenditure_type', 'expenditure_type_display', 'project_title',
+            'amount', 'allocated_by_name', 'created_at'
+        ]
+
+
+class DonationTrackingSerializer(serializers.ModelSerializer):
+    expenditure_allocations = DonationExpenditureDetailSerializer(many=True, read_only=True, source='expenditure_allocations')
+    total_allocated = serializers.SerializerMethodField()
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = Donation
+        fields = [
+            'id', 'order_no', 'amount', 'status', 'status_display',
+            'total_allocated', 'expenditure_allocations', 'paid_at', 'created_at'
+        ]
+
+    def get_total_allocated(self, obj):
+        return obj.expenditure_allocations.aggregate(
+            total=db_models.Sum('amount')
+        )['total'] or Decimal('0')
+
+
+class ProjectExpenditureSummarySerializer(serializers.ModelSerializer):
+    expenditures = ExpenditureListSerializer(many=True, read_only=True)
+    total_expenditure = serializers.SerializerMethodField()
+    total_allocated = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Project
+        fields = [
+            'id', 'title', 'current_amount', 'used_amount',
+            'total_expenditure', 'total_allocated', 'expenditures'
+        ]
+
+    def get_total_expenditure(self, obj):
+        return obj.expenditures.aggregate(total=db_models.Sum('amount'))['total'] or Decimal('0')
+
+    def get_total_allocated(self, obj):
+        return DonationExpenditure.objects.filter(
+            expenditure__project=obj
+        ).aggregate(total=db_models.Sum('amount'))['total'] or Decimal('0')
