@@ -87,10 +87,12 @@
           </div>
 
           <div class="bg-white rounded-xl p-6 card-shadow">
-            <h3 class="text-lg font-bold text-gray-800 mb-4 flex items-center">
-              <el-icon class="text-love mr-2"><Money /></el-icon>
-              资金用途分类预算表
-            </h3>
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-lg font-bold text-gray-800 flex items-center">
+                <el-icon class="text-love mr-2"><Money /></el-icon>
+                资金用途分类预算表
+              </h3>
+            </div>
             <p class="text-gray-500 text-sm mb-4">预算总金额：<span class="text-love font-bold">¥{{ formatNumber(project.budget_total || 0) }}</span></p>
 
             <el-table :data="project.budgets" border stripe style="width: 100%">
@@ -115,6 +117,78 @@
               <div class="bg-love-50 px-6 py-3 rounded-lg">
                 <span class="text-gray-600 mr-4">预算合计：</span>
                 <span class="text-2xl font-bold text-love">¥{{ formatNumber(project.budget_total || 0) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="bg-white rounded-xl p-6 card-shadow">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-lg font-bold text-gray-800 flex items-center">
+                <el-icon class="text-love mr-2"><ChatDotRound /></el-icon>
+                项目进展动态
+              </h3>
+              <el-button
+                v-if="isProjectInitiator"
+                type="primary"
+                size="small"
+                class="!bg-love !border-love"
+                @click="$router.push('/projects/updates/create')"
+              >
+                <el-icon class="mr-1"><Plus /></el-icon>
+                发布进展
+              </el-button>
+            </div>
+
+            <div v-loading="updatesLoading" class="min-h-[200px]">
+              <el-empty
+                v-if="projectUpdates.length === 0 && !updatesLoading"
+                description="暂无项目进展动态"
+              />
+
+              <div v-else class="space-y-4">
+                <div
+                  v-for="update in projectUpdates"
+                  :key="update.id"
+                  class="border border-gray-100 rounded-xl p-5 hover:border-love transition-colors"
+                  :class="{ 'border-love-200 bg-love-50/30': String(update.id) === highlightUpdateId }"
+                >
+                  <div class="flex items-center gap-2 mb-3">
+                    <el-tag size="small" :type="updateTypeTagType(update.update_type)">
+                      {{ update.update_type_display }}
+                    </el-tag>
+                    <span class="text-xs text-gray-400">{{ formatDateTime(update.created_at) }}</span>
+                  </div>
+                  <h4 class="font-semibold text-gray-800 mb-2">{{ update.title }}</h4>
+                  <p class="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap mb-3">{{ update.content }}</p>
+
+                  <div v-if="update.images && update.images.length > 0" class="grid grid-cols-3 gap-2 mb-3">
+                    <div
+                      v-for="(img, idx) in update.images"
+                      :key="img.id"
+                      class="aspect-square rounded-lg overflow-hidden bg-gray-100 cursor-pointer"
+                      @click="previewImage(img.image)"
+                    >
+                      <img :src="img.image" :alt="img.description || `图片${idx + 1}`" class="w-full h-full object-cover hover:scale-105 transition-transform" />
+                    </div>
+                  </div>
+
+                  <div v-if="update.videos && update.videos.length > 0" class="space-y-2">
+                    <div
+                      v-for="video in update.videos"
+                      :key="video.id"
+                      class="bg-gray-50 rounded-lg p-3 flex items-center gap-3"
+                    >
+                      <div class="w-16 h-16 rounded bg-gray-200 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                        <img v-if="video.cover_image" :src="video.cover_image" class="w-full h-full object-cover" />
+                        <el-icon v-else class="text-2xl text-gray-400"><VideoCamera /></el-icon>
+                      </div>
+                      <div class="flex-1 min-w-0">
+                        <p class="text-sm text-gray-700 truncate">{{ video.description || '视频文件' }}</p>
+                        <video :src="video.video" controls class="w-full mt-2 rounded" style="max-height: 200px;" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -290,19 +364,23 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="imagePreviewVisible" width="80%">
+      <img :src="previewImageUrl" style="width: 100%" />
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getProjectDetail, createDonation, simulatePayment } from '@/api/projects'
+import { getProjectDetail, createDonation, simulatePayment, getProjectUpdates } from '@/api/projects'
 import { useUserStore } from '@/stores/user'
-import type { Project, DonationCreateForm } from '@/types'
+import type { Project, DonationCreateForm, ProjectUpdate } from '@/types'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import {
   Collection, WarningFilled, Clock, Calendar, Timer, Document, Money,
-  Cherry, CircleCheck, CircleClose
+  Cherry, CircleCheck, CircleClose, ChatDotRound, Plus, VideoCamera
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -310,6 +388,12 @@ const router = useRouter()
 const userStore = useUserStore()
 const loading = ref(false)
 const project = ref<Project | null>(null)
+
+const updatesLoading = ref(false)
+const projectUpdates = ref<ProjectUpdate[]>([])
+const highlightUpdateId = ref('')
+const imagePreviewVisible = ref(false)
+const previewImageUrl = ref('')
 
 const donationDialogVisible = ref(false)
 const donationSubmitting = ref(false)
@@ -327,6 +411,10 @@ const donationRules: FormRules = {
     { required: true, message: '请输入捐赠金额', trigger: 'blur' },
   ],
 }
+
+const isProjectInitiator = computed(() => {
+  return project.value && userStore.userInfo?.id === project.value.initiator.id
+})
 
 const remainingAmount = computed(() => {
   if (!project.value) return 0
@@ -358,6 +446,15 @@ const statusTagType = (status: string) => {
   }
 }
 
+const updateTypeTagType = (type: string) => {
+  switch (type) {
+    case 'image': return 'success'
+    case 'video': return 'warning'
+    case 'mixed': return 'danger'
+    default: return 'info'
+  }
+}
+
 const formatNumber = (num: string | number) => {
   const n = typeof num === 'string' ? parseFloat(num) : num
   return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -369,6 +466,11 @@ const formatDate = (dateStr: string) => {
 
 const formatDateTime = (dateStr: string) => {
   return new Date(dateStr).toLocaleString('zh-CN')
+}
+
+const previewImage = (url: string) => {
+  previewImageUrl.value = url
+  imagePreviewVisible.value = true
 }
 
 const openDonationDialog = () => {
@@ -418,10 +520,27 @@ const fetchDetail = async () => {
     const id = parseInt(route.params.id as string)
     const res = await getProjectDetail(id)
     project.value = res
+    fetchProjectUpdates(id)
   } catch (error) {
     console.error('Fetch project detail error:', error)
   } finally {
     loading.value = false
+  }
+}
+
+const fetchProjectUpdates = async (projectId: number) => {
+  updatesLoading.value = true
+  try {
+    const res = await getProjectUpdates(projectId)
+    projectUpdates.value = res
+    const updateParam = route.query.update as string
+    if (updateParam) {
+      highlightUpdateId.value = updateParam
+    }
+  } catch (error) {
+    console.error('Fetch project updates error:', error)
+  } finally {
+    updatesLoading.value = false
   }
 }
 

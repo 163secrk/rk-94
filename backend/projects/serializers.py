@@ -1,13 +1,16 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.db import models as db_models
+from django.db import transaction
 from decimal import Decimal
 import json
 from .models import (
     Project, ProjectBudget, ProjectStatus, ProjectCategory,
     Donation, DonationStatus, RefundRequest, RefundRequestStatus,
     Expenditure, ExpenditureInvoice, DonationExpenditure, ExpenditureType,
-    DonationCertificate, CertificateType
+    DonationCertificate, CertificateType,
+    ProjectUpdate, ProjectUpdateImage, ProjectUpdateVideo, UpdateType,
+    Notification, NotificationType
 )
 
 User = get_user_model()
@@ -522,3 +525,176 @@ class DonationCertificateDetailSerializer(serializers.ModelSerializer):
 class CertificateVerifySerializer(serializers.Serializer):
     certificate_no = serializers.CharField(max_length=64)
     integrity_hash = serializers.CharField(max_length=128, required=False)
+
+
+class ProjectUpdateImageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectUpdateImage
+        fields = ['id', 'image', 'description', 'sort_order', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class ProjectUpdateImageCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectUpdateImage
+        fields = ['image', 'description', 'sort_order']
+
+
+class ProjectUpdateVideoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectUpdateVideo
+        fields = ['id', 'video', 'cover_image', 'description', 'sort_order', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class ProjectUpdateVideoCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectUpdateVideo
+        fields = ['video', 'cover_image', 'description', 'sort_order']
+
+
+class ProjectUpdateSimpleProjectSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Project
+        fields = ['id', 'title', 'cover_image', 'status', 'status_display']
+        read_only_fields = fields
+
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+
+class ProjectUpdateListSerializer(serializers.ModelSerializer):
+    initiator = InitiatorInfoSerializer(read_only=True)
+    update_type_display = serializers.CharField(source='get_update_type_display', read_only=True)
+    images_count = serializers.SerializerMethodField()
+    videos_count = serializers.SerializerMethodField()
+    project = ProjectUpdateSimpleProjectSerializer(read_only=True)
+
+    class Meta:
+        model = ProjectUpdate
+        fields = [
+            'id', 'project', 'title', 'content', 'update_type', 'update_type_display',
+            'initiator', 'images_count', 'videos_count', 'created_at', 'updated_at'
+        ]
+
+    def get_images_count(self, obj):
+        return obj.images.count()
+
+    def get_videos_count(self, obj):
+        return obj.videos.count()
+
+
+class ProjectUpdateDetailSerializer(serializers.ModelSerializer):
+    initiator = InitiatorInfoSerializer(read_only=True)
+    update_type_display = serializers.CharField(source='get_update_type_display', read_only=True)
+    images = ProjectUpdateImageSerializer(many=True, read_only=True)
+    videos = ProjectUpdateVideoSerializer(many=True, read_only=True)
+    project = ProjectUpdateSimpleProjectSerializer(read_only=True)
+
+    class Meta:
+        model = ProjectUpdate
+        fields = [
+            'id', 'project', 'title', 'content', 'update_type', 'update_type_display',
+            'initiator', 'images', 'videos', 'created_at', 'updated_at'
+        ]
+
+
+class ProjectUpdateCreateSerializer(serializers.ModelSerializer):
+    images = serializers.ListField(
+        child=serializers.FileField(),
+        required=False,
+        write_only=True
+    )
+    videos = serializers.ListField(
+        child=serializers.FileField(),
+        required=False,
+        write_only=True
+    )
+
+    class Meta:
+        model = ProjectUpdate
+        fields = ['project', 'title', 'content', 'images', 'videos']
+
+    def validate_project(self, value):
+        user = self.context['request'].user
+        if value.initiator != user:
+            raise serializers.ValidationError('只能为您自己发起的项目发布进展')
+        if value.status not in [ProjectStatus.FUNDING, ProjectStatus.EXECUTING, ProjectStatus.COMPLETED]:
+            raise serializers.ValidationError('当前项目状态不允许发布进展')
+        return value
+
+    def validate(self, attrs):
+        content = attrs.get('content', '')
+        images = attrs.get('images', [])
+        videos = attrs.get('videos', [])
+        if not content.strip() and not images and not videos:
+            raise serializers.ValidationError('至少需要填写文字内容或上传图片/视频')
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        images_data = validated_data.pop('images', [])
+        videos_data = validated_data.pop('videos', [])
+        user = self.context['request'].user
+        validated_data['initiator'] = user
+        project_update = ProjectUpdate.objects.create(**validated_data)
+
+        for idx, image_file in enumerate(images_data):
+            ProjectUpdateImage.objects.create(
+                project_update=project_update,
+                image=image_file,
+                sort_order=idx
+            )
+
+        for idx, video_file in enumerate(videos_data):
+            ProjectUpdateVideo.objects.create(
+                project_update=project_update,
+                video=video_file,
+                sort_order=idx
+            )
+
+        project_update.save()
+        project_update.notify_donors()
+        return project_update
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    notification_type_display = serializers.CharField(source='get_notification_type_display', read_only=True)
+
+    class Meta:
+        model = Notification
+        fields = [
+            'id', 'notification_type', 'notification_type_display',
+            'title', 'content', 'is_read', 'read_at',
+            'related_project_id', 'related_update_id', 'related_donation_id',
+            'created_at'
+        ]
+        read_only_fields = fields
+
+
+class NotificationMarkReadSerializer(serializers.Serializer):
+    notification_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False
+    )
+    all = serializers.BooleanField(required=False, default=False)
+
+
+class MySupportedProjectUpdateSerializer(serializers.ModelSerializer):
+    update_type_display = serializers.CharField(source='get_update_type_display', read_only=True)
+    images_count = serializers.SerializerMethodField()
+    videos_count = serializers.SerializerMethodField()
+    project = ProjectUpdateSimpleProjectSerializer(read_only=True)
+    initiator = InitiatorInfoSerializer(read_only=True)
+
+    class Meta:
+        model = ProjectUpdate
+        fields = [
+            'id', 'project', 'title', 'content', 'update_type', 'update_type_display',
+            'initiator', 'images_count', 'videos_count', 'created_at'
+        ]
+
+    def get_images_count(self, obj):
+        return obj.images.count()
+
+    def get_videos_count(self, obj):
+        return obj.videos.count()

@@ -517,6 +517,169 @@ class RefundRequest(models.Model):
         return self
 
 
+class UpdateType(models.TextChoices):
+    TEXT = 'text', _('文字动态')
+    IMAGE = 'image', _('图片动态')
+    VIDEO = 'video', _('视频动态')
+    MIXED = 'mixed', _('混合动态')
+
+
+class NotificationType(models.TextChoices):
+    PROJECT_UPDATE = 'project_update', _('项目进展')
+    DONATION_SUCCESS = 'donation_success', _('捐赠成功')
+    PROJECT_COMPLETED = 'project_completed', _('项目完成')
+    SYSTEM = 'system', _('系统通知')
+
+
+class ProjectUpdate(models.Model):
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='updates',
+        verbose_name='所属项目'
+    )
+    initiator = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='project_updates',
+        verbose_name='发布人'
+    )
+    title = models.CharField(max_length=200, verbose_name='动态标题')
+    content = models.TextField(verbose_name='动态内容')
+    update_type = models.CharField(
+        max_length=20,
+        choices=UpdateType.choices,
+        default=UpdateType.TEXT,
+        verbose_name='动态类型'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='发布时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '项目进展'
+        verbose_name_plural = verbose_name
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.project.title} - {self.title}'
+
+    def save(self, *args, **kwargs):
+        has_images = self.images.exists() if self.pk else False
+        has_videos = self.videos.exists() if self.pk else False
+        if has_images and has_videos:
+            self.update_type = UpdateType.MIXED
+        elif has_images:
+            self.update_type = UpdateType.IMAGE
+        elif has_videos:
+            self.update_type = UpdateType.VIDEO
+        else:
+            self.update_type = UpdateType.TEXT
+        super().save(*args, **kwargs)
+
+    def notify_donors(self):
+        from django.utils import timezone
+        donor_ids = Donation.objects.filter(
+            project=self.project,
+            status=DonationStatus.PAID
+        ).values_list('user_id', flat=True).distinct()
+
+        notifications = []
+        for donor_id in donor_ids:
+            notifications.append(Notification(
+                user_id=donor_id,
+                notification_type=NotificationType.PROJECT_UPDATE,
+                title=f'【项目进展】{self.project.title}',
+                content=self.title,
+                related_project_id=self.project_id,
+                related_update_id=self.pk,
+                created_at=timezone.now()
+            ))
+
+        if notifications:
+            Notification.objects.bulk_create(notifications)
+
+
+class ProjectUpdateImage(models.Model):
+    project_update = models.ForeignKey(
+        ProjectUpdate,
+        on_delete=models.CASCADE,
+        related_name='images',
+        verbose_name='所属动态'
+    )
+    image = models.ImageField(upload_to='project_updates/images/', verbose_name='图片')
+    description = models.CharField(max_length=200, blank=True, null=True, verbose_name='图片描述')
+    sort_order = models.IntegerField(default=0, verbose_name='排序')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='上传时间')
+
+    class Meta:
+        verbose_name = '进展图片'
+        verbose_name_plural = verbose_name
+        ordering = ['sort_order', 'created_at']
+
+    def __str__(self):
+        return f'{self.project_update.title} - 图片{self.id}'
+
+
+class ProjectUpdateVideo(models.Model):
+    project_update = models.ForeignKey(
+        ProjectUpdate,
+        on_delete=models.CASCADE,
+        related_name='videos',
+        verbose_name='所属动态'
+    )
+    video = models.FileField(upload_to='project_updates/videos/', verbose_name='视频文件')
+    cover_image = models.ImageField(upload_to='project_updates/video_covers/', blank=True, null=True, verbose_name='视频封面')
+    description = models.CharField(max_length=200, blank=True, null=True, verbose_name='视频描述')
+    sort_order = models.IntegerField(default=0, verbose_name='排序')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='上传时间')
+
+    class Meta:
+        verbose_name = '进展视频'
+        verbose_name_plural = verbose_name
+        ordering = ['sort_order', 'created_at']
+
+    def __str__(self):
+        return f'{self.project_update.title} - 视频{self.id}'
+
+
+class Notification(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='notifications',
+        verbose_name='接收用户'
+    )
+    notification_type = models.CharField(
+        max_length=30,
+        choices=NotificationType.choices,
+        default=NotificationType.SYSTEM,
+        verbose_name='通知类型'
+    )
+    title = models.CharField(max_length=200, verbose_name='通知标题')
+    content = models.TextField(verbose_name='通知内容')
+    is_read = models.BooleanField(default=False, verbose_name='是否已读')
+    read_at = models.DateTimeField(blank=True, null=True, verbose_name='阅读时间')
+    related_project_id = models.IntegerField(blank=True, null=True, verbose_name='关联项目ID')
+    related_update_id = models.IntegerField(blank=True, null=True, verbose_name='关联动态ID')
+    related_donation_id = models.IntegerField(blank=True, null=True, verbose_name='关联捐赠ID')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
+
+    class Meta:
+        verbose_name = '通知'
+        verbose_name_plural = verbose_name
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.user.username} - {self.title}'
+
+    def mark_as_read(self):
+        from django.utils import timezone
+        if not self.is_read:
+            self.is_read = True
+            self.read_at = timezone.now()
+            self.save()
+
+
 class CertificateType(models.TextChoices):
     DONATION_THRESHOLD = 'donation_threshold', _('大额捐赠证书')
     PROJECT_SUCCESS = 'project_success', _('项目筹款成功证书')

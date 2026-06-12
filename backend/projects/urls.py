@@ -31,7 +31,16 @@ from .views import (
     MyCertificateListView,
     CertificateDetailView,
     CertificateVerifyView,
-    ProjectCertificateListView
+    ProjectCertificateListView,
+    ProjectUpdateListView,
+    ProjectUpdateCreateView,
+    ProjectUpdateDetailView,
+    MyProjectUpdateListView,
+    MySupportedProjectUpdatesView,
+    NotificationListView,
+    NotificationUnreadCountView,
+    NotificationMarkReadView,
+    NotificationDetailView
 )
 
 urlpatterns = [
@@ -73,4 +82,16 @@ urlpatterns = [
     path('certificates/verify/', CertificateVerifyView.as_view(), name='certificate_verify'),
     path('certificates/<int:pk>/', CertificateDetailView.as_view(), name='certificate_detail'),
     path('<int:project_id>/certificates/', ProjectCertificateListView.as_view(), name='project_certificate_list'),
+
+    path('updates/create/', ProjectUpdateCreateView.as_view(), name='project_update_create'),
+    path('updates/my/', MyProjectUpdateListView.as_view(), name='my_project_update_list'),
+    path('updates/my/<int:project_id>/', MyProjectUpdateListView.as_view(), name='my_project_updates_for_project'),
+    path('updates/supported/', MySupportedProjectUpdatesView.as_view(), name='my_supported_project_updates'),
+    path('updates/<int:pk>/', ProjectUpdateDetailView.as_view(), name='project_update_detail'),
+    path('<int:project_id>/updates/', ProjectUpdateListView.as_view(), name='project_update_list'),
+
+    path('notifications/', NotificationListView.as_view(), name='notification_list'),
+    path('notifications/unread-count/', NotificationUnreadCountView.as_view(), name='notification_unread_count'),
+    path('notifications/mark-read/', NotificationMarkReadView.as_view(), name='notification_mark_read'),
+    path('notifications/<int:pk>/', NotificationDetailView.as_view(), name='notification_detail'),
 ]

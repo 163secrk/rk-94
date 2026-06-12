@@ -308,3 +308,89 @@ export interface ProjectExpenditureSummary {
   total_allocated: string | number
   expenditures: Expenditure[]
 }
+
+export type UpdateType = 'text' | 'image' | 'video' | 'mixed'
+
+export const UPDATE_TYPE_OPTIONS: { value: UpdateType; label: string }[] = [
+  { value: 'text', label: '文字动态' },
+  { value: 'image', label: '图片动态' },
+  { value: 'video', label: '视频动态' },
+  { value: 'mixed', label: '混合动态' },
+]
+
+export interface ProjectUpdateImage {
+  id: number
+  image: string
+  description: string | null
+  sort_order: number
+  created_at: string
+}
+
+export interface ProjectUpdateVideo {
+  id: number
+  video: string
+  cover_image: string | null
+  description: string | null
+  sort_order: number
+  created_at: string
+}
+
+export interface ProjectUpdateSimpleProject {
+  id: number
+  title: string
+  cover_image: string | null
+  status: ProjectStatus
+  status_display: string
+}
+
+export interface ProjectUpdate {
+  id: number
+  project: ProjectUpdateSimpleProject
+  title: string
+  content: string
+  update_type: UpdateType
+  update_type_display: string
+  initiator: ProjectInitiator
+  images_count: number
+  videos_count: number
+  images?: ProjectUpdateImage[]
+  videos?: ProjectUpdateVideo[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectUpdateCreateForm {
+  project: number
+  title: string
+  content: string
+  images?: File[]
+  videos?: File[]
+}
+
+export type NotificationType = 'project_update' | 'donation_success' | 'project_completed' | 'system'
+
+export const NOTIFICATION_TYPE_OPTIONS: { value: NotificationType; label: string }[] = [
+  { value: 'project_update', label: '项目进展' },
+  { value: 'donation_success', label: '捐赠成功' },
+  { value: 'project_completed', label: '项目完成' },
+  { value: 'system', label: '系统通知' },
+]
+
+export interface Notification {
+  id: number
+  notification_type: NotificationType
+  notification_type_display: string
+  title: string
+  content: string
+  is_read: boolean
+  read_at: string | null
+  related_project_id: number | null
+  related_update_id: number | null
+  related_donation_id: number | null
+  created_at: string
+}
+
+export interface NotificationListResponse {
+  list: Notification[]
+  unread_count: number
+}

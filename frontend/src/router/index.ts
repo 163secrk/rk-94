@@ -91,6 +91,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/DonationTracking.vue'),
         meta: { title: '捐款追踪' },
       },
+      {
+        path: 'projects/updates/create',
+        name: 'ProjectUpdateCreate',
+        component: () => import('@/views/ProjectUpdateCreate.vue'),
+        meta: { title: '发布项目进展', roles: ['initiator'] },
+      },
     ],
   },
   {

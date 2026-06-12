@@ -98,6 +98,87 @@
       </div>
     </div>
 
+    <div v-if="userStore.isDonor" class="bg-white rounded-xl p-6 card-shadow">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-bold text-gray-800 flex items-center">
+          <el-icon class="text-love mr-2"><Bell /></el-icon>
+          我支持的项目最新动向
+        </h3>
+        <el-button
+          type="primary"
+          link
+          class="!text-love"
+          @click="refreshSupportedUpdates"
+        >
+          <el-icon class="mr-1"><Refresh /></el-icon>
+          刷新
+        </el-button>
+      </div>
+
+      <div v-loading="updatesLoading" class="min-h-[200px]">
+        <el-empty
+          v-if="supportedUpdates.length === 0 && !updatesLoading"
+          description="暂无项目动向，快去支持一个公益项目吧"
+        >
+          <el-button
+            type="primary"
+            class="!bg-love !border-love"
+            @click="$router.push('/')"
+          >
+            浏览项目
+          </el-button>
+        </el-empty>
+
+        <div v-else class="space-y-4">
+          <div
+            v-for="update in supportedUpdates"
+            :key="update.id"
+            class="p-4 bg-gray-50 rounded-xl hover:bg-love-50 transition-colors cursor-pointer"
+            @click="goToUpdateDetail(update)"
+          >
+            <div class="flex items-start gap-4">
+              <div
+                class="w-14 h-14 rounded-lg overflow-hidden bg-gray-200 flex-shrink-0"
+              >
+                <img
+                  v-if="update.project.cover_image"
+                  :src="update.project.cover_image"
+                  :alt="update.project.title"
+                  class="w-full h-full object-cover"
+                />
+                <div v-else class="w-full h-full flex items-center justify-center bg-love-100">
+                  <el-icon class="text-xl text-love opacity-60"><Collection /></el-icon>
+                </div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <el-tag size="small" :type="updateTypeTagType(update.update_type)">
+                    {{ update.update_type_display }}
+                  </el-tag>
+                  <span class="text-xs text-gray-400">{{ formatDateTime(update.created_at) }}</span>
+                </div>
+                <h4 class="font-semibold text-gray-800 truncate mb-1">
+                  {{ update.title }}
+                </h4>
+                <p class="text-sm text-gray-500 line-clamp-2">{{ update.content }}</p>
+                <div class="flex items-center gap-3 mt-2 text-xs text-gray-400">
+                  <span class="text-love font-medium">{{ update.project.title }}</span>
+                  <span v-if="update.images_count > 0" class="flex items-center gap-1">
+                    <el-icon><Picture /></el-icon>
+                    {{ update.images_count }}张图片
+                  </span>
+                  <span v-if="update.videos_count > 0" class="flex items-center gap-1">
+                    <el-icon><VideoCamera /></el-icon>
+                    {{ update.videos_count }}个视频
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="bg-white rounded-xl p-6 card-shadow">
       <h3 class="text-lg font-bold text-gray-800 mb-4 flex items-center">
         <el-icon class="text-love mr-2"><User /></el-icon>
@@ -130,15 +211,21 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
+import { getMySupportedProjectUpdates } from '@/api/projects'
+import type { ProjectUpdate } from '@/types'
 import {
   CircleCheck, Warning, Wallet, Files, Star,
-  TrendCharts, InfoFilled, User, Search, Plus, FolderOpened, CircleCheckFilled,
-  DocumentChecked
+  TrendCharts, InfoFilled, User, Search, Plus, FolderOpened,
+  DocumentChecked, Bell, Refresh, Collection, Picture, VideoCamera
 } from '@element-plus/icons-vue'
 
+const router = useRouter()
 const userStore = useUserStore()
+const updatesLoading = ref(false)
+const supportedUpdates = ref<ProjectUpdate[]>([])
 
 const stats = computed(() => [
   {
@@ -150,7 +237,7 @@ const stats = computed(() => [
   },
   {
     label: '参与项目',
-    value: 0,
+    value: supportedUpdates.value.length > 0 ? new Set(supportedUpdates.value.map(u => u.project.id)).size : 0,
     icon: 'Files',
     bgColor: 'bg-blue-50',
     iconColor: 'text-blue-500',
@@ -186,6 +273,12 @@ const quickActions = computed(() => {
       icon: 'FolderOpened',
       path: '/projects/my',
       colorClass: 'from-purple-500 to-purple-400 hover:from-purple-600 hover:to-purple-500',
+    })
+    actions.splice(3, 0, {
+      name: '发布进展',
+      icon: 'Bell',
+      path: '/projects/updates/create',
+      colorClass: 'from-orange-500 to-orange-400 hover:from-orange-600 hover:to-orange-500',
     })
   }
 
@@ -232,8 +325,45 @@ const tips = [
   },
 ]
 
+const updateTypeTagType = (type: string) => {
+  switch (type) {
+    case 'image': return 'success'
+    case 'video': return 'warning'
+    case 'mixed': return 'danger'
+    default: return 'info'
+  }
+}
+
+const goToUpdateDetail = (update: ProjectUpdate) => {
+  if (update.project?.id) {
+    router.push(`/projects/${update.project.id}?update=${update.id}`)
+  }
+}
+
+const refreshSupportedUpdates = async () => {
+  updatesLoading.value = true
+  try {
+    const res = await getMySupportedProjectUpdates()
+    supportedUpdates.value = res
+  } catch (error) {
+    console.error('Fetch supported updates error:', error)
+  } finally {
+    updatesLoading.value = false
+  }
+}
+
 const formatDate = (dateStr?: string) => {
   if (!dateStr) return '-'
   return new Date(dateStr).toLocaleString('zh-CN')
 }
+
+const formatDateTime = (dateStr: string) => {
+  return new Date(dateStr).toLocaleString('zh-CN')
+}
+
+onMounted(() => {
+  if (userStore.isDonor) {
+    refreshSupportedUpdates()
+  }
+})
 </script>

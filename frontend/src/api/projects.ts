@@ -3,7 +3,8 @@ import type {
   Project, ProjectCreateForm, ProjectAuditForm, Donation, DonationCreateForm,
   Expenditure, ExpenditureCreateForm, ExpenditureInvoice,
   DonationAllocationCreateForm, DonationAllocationDetail,
-  DonationTracking, ProjectExpenditureSummary
+  DonationTracking, ProjectExpenditureSummary,
+  ProjectUpdate, ProjectUpdateCreateForm, Notification, NotificationListResponse
 } from '@/types'
 
 export const getPublicProjects = (category?: string) => {
@@ -87,4 +88,50 @@ export const getDonationTracking = (donationId: number) => {
 
 export const getProjectExpenditureSummary = (projectId: number) => {
   return request.get<any, ProjectExpenditureSummary>(`/projects/${projectId}/expenditure-summary/`)
+}
+
+export const getProjectUpdates = (projectId: number) => {
+  return request.get<any, ProjectUpdate[]>(`/projects/${projectId}/updates/`)
+}
+
+export const getMyProjectUpdates = (projectId?: number) => {
+  const url = projectId ? `/projects/updates/my/${projectId}/` : '/projects/updates/my/'
+  return request.get<any, ProjectUpdate[]>(url)
+}
+
+export const getMySupportedProjectUpdates = () => {
+  return request.get<any, ProjectUpdate[]>('/projects/updates/supported/')
+}
+
+export const getProjectUpdateDetail = (id: number) => {
+  return request.get<any, ProjectUpdate>(`/projects/updates/${id}/`)
+}
+
+export const createProjectUpdate = (data: FormData) => {
+  return request.post<any, ProjectUpdate>('/projects/updates/create/', data, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  })
+}
+
+export const getNotifications = (isRead?: boolean, type?: string) => {
+  const params: any = {}
+  if (isRead !== undefined) params.is_read = isRead
+  if (type) params.type = type
+  return request.get<any, NotificationListResponse>('/projects/notifications/', { params })
+}
+
+export const getNotificationUnreadCount = () => {
+  return request.get<any, { unread_count: number }>('/projects/notifications/unread-count/')
+}
+
+export const markNotificationsRead = (notificationIds?: number[], all = false) => {
+  const data: any = { all }
+  if (notificationIds) data.notification_ids = notificationIds
+  return request.post<any, { updated_count: number }>('/projects/notifications/mark-read/', data)
+}
+
+export const getNotificationDetail = (id: number) => {
+  return request.get<any, Notification>(`/projects/notifications/${id}/`)
 }

@@ -8,7 +8,9 @@ from .models import (
     Project, ProjectStatus, Donation, DonationStatus,
     RefundRequest, RefundRequestStatus,
     Expenditure, ExpenditureInvoice, DonationExpenditure,
-    DonationCertificate, CertificateType
+    DonationCertificate, CertificateType,
+    ProjectUpdate, ProjectUpdateImage, ProjectUpdateVideo, UpdateType,
+    Notification, NotificationType
 )
 from .serializers import (
     ProjectListSerializer,
@@ -34,7 +36,13 @@ from .serializers import (
     ProjectExpenditureSummarySerializer,
     DonationCertificateListSerializer,
     DonationCertificateDetailSerializer,
-    CertificateVerifySerializer
+    CertificateVerifySerializer,
+    ProjectUpdateListSerializer,
+    ProjectUpdateDetailSerializer,
+    ProjectUpdateCreateSerializer,
+    NotificationSerializer,
+    NotificationMarkReadSerializer,
+    MySupportedProjectUpdateSerializer
 )
 
 
@@ -858,6 +866,244 @@ class ProjectCertificateListView(generics.ListAPIView):
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
         serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class ProjectUpdateListView(generics.ListAPIView):
+    serializer_class = ProjectUpdateListSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        project_id = self.kwargs['project_id']
+        return ProjectUpdate.objects.filter(project_id=project_id).order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class ProjectUpdateCreateView(generics.CreateAPIView):
+    serializer_class = ProjectUpdateCreateSerializer
+    permission_classes = [IsAuthenticated, IsInitiator]
+    parser_classes = [parsers.MultiPartParser, parsers.FormParser]
+
+    def create(self, request, *args, **kwargs):
+        data = request.data.copy()
+        images = request.FILES.getlist('images')
+        videos = request.FILES.getlist('videos')
+        if images:
+            data.setlist('images', images)
+        if videos:
+            data.setlist('videos', videos)
+
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        project_update = serializer.save()
+        detail_serializer = ProjectUpdateDetailSerializer(project_update)
+        return Response({
+            'code': 200,
+            'message': '项目进展发布成功',
+            'data': detail_serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+
+class ProjectUpdateDetailView(generics.RetrieveAPIView):
+    serializer_class = ProjectUpdateDetailSerializer
+    permission_classes = [AllowAny]
+    queryset = ProjectUpdate.objects.all()
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class MyProjectUpdateListView(generics.ListAPIView):
+    serializer_class = ProjectUpdateListSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        project_id = self.kwargs.get('project_id')
+        queryset = ProjectUpdate.objects.filter(initiator=self.request.user)
+        if project_id:
+            queryset = queryset.filter(project_id=project_id)
+        return queryset.order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class MySupportedProjectUpdatesView(generics.ListAPIView):
+    serializer_class = MySupportedProjectUpdateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        donated_project_ids = Donation.objects.filter(
+            user=user,
+            status=DonationStatus.PAID
+        ).values_list('project_id', flat=True).distinct()
+
+        return ProjectUpdate.objects.filter(
+            project_id__in=donated_project_ids
+        ).select_related('project', 'initiator').order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class NotificationListView(generics.ListAPIView):
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = Notification.objects.filter(user=self.request.user)
+        is_read = self.request.query_params.get('is_read')
+        notification_type = self.request.query_params.get('type')
+        if is_read is not None:
+            queryset = queryset.filter(is_read=(is_read.lower() == 'true'))
+        if notification_type:
+            queryset = queryset.filter(notification_type=notification_type)
+        return queryset.order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            data = self.get_paginated_response(serializer.data)
+            unread_count = Notification.objects.filter(
+                user=request.user,
+                is_read=False
+            ).count()
+            data.data['unread_count'] = unread_count
+            return data
+        serializer = self.get_serializer(queryset, many=True)
+        unread_count = Notification.objects.filter(
+            user=request.user,
+            is_read=False
+        ).count()
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': {
+                'list': serializer.data,
+                'unread_count': unread_count
+            }
+        })
+
+
+class NotificationUnreadCountView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        count = Notification.objects.filter(
+            user=request.user,
+            is_read=False
+        ).count()
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': {
+                'unread_count': count
+            }
+        })
+
+
+class NotificationMarkReadView(generics.GenericAPIView):
+    serializer_class = NotificationMarkReadSerializer
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = serializer.validated_data
+
+        queryset = Notification.objects.filter(user=request.user)
+
+        if validated_data.get('all'):
+            updated = queryset.filter(is_read=False).update(
+                is_read=True,
+                read_at=timezone.now()
+            )
+        else:
+            notification_ids = validated_data.get('notification_ids', [])
+            if not notification_ids:
+                return Response({
+                    'code': 400,
+                    'message': '请选择要标记为已读的通知'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            updated = queryset.filter(
+                id__in=notification_ids,
+                is_read=False
+            ).update(
+                is_read=True,
+                read_at=timezone.now()
+            )
+
+        return Response({
+            'code': 200,
+            'message': f'已标记 {updated} 条通知为已读',
+            'data': {
+                'updated_count': updated
+            }
+        })
+
+
+class NotificationDetailView(generics.RetrieveAPIView):
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Notification.objects.all()
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.user != request.user:
+            return Response({
+                'code': 403,
+                'message': '无权查看该通知'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        if not instance.is_read:
+            instance.mark_as_read()
+
+        serializer = self.get_serializer(instance)
         return Response({
             'code': 200,
             'message': '获取成功',

@@ -5,7 +5,9 @@ from .models import (
     Project, ProjectBudget, Donation, RefundRequest,
     ProjectStatus, RefundRequestStatus,
     Expenditure, ExpenditureInvoice, DonationExpenditure, ExpenditureType,
-    DonationCertificate, CertificateType
+    DonationCertificate, CertificateType,
+    ProjectUpdate, ProjectUpdateImage, ProjectUpdateVideo, UpdateType,
+    Notification, NotificationType
 )
 
 
@@ -313,3 +315,133 @@ class DonationCertificateAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+class ProjectUpdateImageInline(admin.TabularInline):
+    model = ProjectUpdateImage
+    extra = 1
+    readonly_fields = ['created_at']
+
+
+class ProjectUpdateVideoInline(admin.TabularInline):
+    model = ProjectUpdateVideo
+    extra = 1
+    readonly_fields = ['created_at']
+
+
+@admin.register(ProjectUpdate)
+class ProjectUpdateAdmin(admin.ModelAdmin):
+    list_display = ['id', 'project_title', 'title', 'initiator', 'update_type_display', 'images_count', 'videos_count', 'created_at']
+    list_filter = ['update_type', 'created_at', 'project__category']
+    search_fields = ['title', 'content', 'project__title', 'initiator__username']
+    readonly_fields = ['created_at', 'updated_at', 'update_type']
+    inlines = [ProjectUpdateImageInline, ProjectUpdateVideoInline]
+    fieldsets = (
+        ('基本信息', {
+            'fields': ('project', 'initiator', 'title', 'content', 'update_type')
+        }),
+        ('时间信息', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def project_title(self, obj):
+        return obj.project.title
+    project_title.short_description = '所属项目'
+    project_title.admin_order_field = 'project__title'
+
+    def update_type_display(self, obj):
+        return obj.get_update_type_display()
+    update_type_display.short_description = '动态类型'
+    update_type_display.admin_order_field = 'update_type'
+
+    def images_count(self, obj):
+        return obj.images.count()
+    images_count.short_description = '图片数'
+
+    def videos_count(self, obj):
+        return obj.videos.count()
+    videos_count.short_description = '视频数'
+
+
+@admin.register(ProjectUpdateImage)
+class ProjectUpdateImageAdmin(admin.ModelAdmin):
+    list_display = ['id', 'project_update_title', 'image_preview', 'description', 'sort_order', 'created_at']
+    list_filter = ['created_at']
+    search_fields = ['project_update__title', 'description']
+    readonly_fields = ['created_at']
+
+    def project_update_title(self, obj):
+        return obj.project_update.title
+    project_update_title.short_description = '所属动态'
+    project_update_title.admin_order_field = 'project_update__title'
+
+    def image_preview(self, obj):
+        if obj.image:
+            from django.utils.html import format_html
+            return format_html(f'<img src="{obj.image.url}" width="60" height="60" style="object-fit:cover;border-radius:4px;" />')
+        return '-'
+    image_preview.short_description = '预览'
+
+
+@admin.register(ProjectUpdateVideo)
+class ProjectUpdateVideoAdmin(admin.ModelAdmin):
+    list_display = ['id', 'project_update_title', 'video', 'description', 'sort_order', 'created_at']
+    list_filter = ['created_at']
+    search_fields = ['project_update__title', 'description']
+    readonly_fields = ['created_at']
+
+    def project_update_title(self, obj):
+        return obj.project_update.title
+    project_update_title.short_description = '所属动态'
+    project_update_title.admin_order_field = 'project_update__title'
+
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'notification_type_display', 'title', 'is_read', 'read_at', 'related_project_id', 'created_at']
+    list_filter = ['notification_type', 'is_read', 'created_at']
+    search_fields = ['title', 'content', 'user__username']
+    readonly_fields = ['created_at']
+    actions = ['mark_as_read', 'mark_as_unread']
+    fieldsets = (
+        ('基本信息', {
+            'fields': ('user', 'notification_type', 'title', 'content')
+        }),
+        ('状态信息', {
+            'fields': ('is_read', 'read_at')
+        }),
+        ('关联信息', {
+            'fields': ('related_project_id', 'related_update_id', 'related_donation_id'),
+            'classes': ('collapse',)
+        }),
+        ('时间信息', {
+            'fields': ('created_at',),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def notification_type_display(self, obj):
+        return obj.get_notification_type_display()
+    notification_type_display.short_description = '通知类型'
+    notification_type_display.admin_order_field = 'notification_type'
+
+    @admin.action(description='标记为已读')
+    def mark_as_read(self, request, queryset):
+        from django.utils import timezone
+        updated = queryset.filter(is_read=False).update(is_read=True, read_at=timezone.now())
+        self.message_user(request, ngettext(
+            '%d 条通知已标记为已读。',
+            '%d 条通知已标记为已读。',
+            updated,
+        ) % updated, messages.SUCCESS)
+
+    @admin.action(description='标记为未读')
+    def mark_as_unread(self, request, queryset):
+        updated = queryset.filter(is_read=True).update(is_read=False, read_at=None)
+        self.message_user(request, ngettext(
+            '%d 条通知已标记为未读。',
+            '%d 条通知已标记为未读。',
+            updated,
+        ) % updated, messages.SUCCESS)

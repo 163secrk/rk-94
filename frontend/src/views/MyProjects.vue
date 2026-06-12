@@ -123,8 +123,17 @@
             {{ formatDate(row.deadline) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="160" align="center" fixed="right">
+        <el-table-column label="操作" width="220" align="center" fixed="right">
           <template #default="{ row }">
+            <el-button
+              v-if="canPublishUpdate(row.status)"
+              type="success"
+              link
+              size="default"
+              @click="goToPublishUpdate(row.id)"
+            >
+              发布进展
+            </el-button>
             <el-button
               type="primary"
               link
@@ -188,6 +197,14 @@ const statusTagType = (status: string) => {
 
 const goToDetail = (id: number) => {
   router.push(`/projects/${id}`)
+}
+
+const goToPublishUpdate = (_projectId: number) => {
+  router.push('/projects/updates/create')
+}
+
+const canPublishUpdate = (status: string) => {
+  return ['funding', 'executing', 'completed'].includes(status)
 }
 
 const formatNumber = (num: string | number) => {
