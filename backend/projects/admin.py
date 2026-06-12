@@ -7,7 +7,10 @@ from .models import (
     Expenditure, ExpenditureInvoice, DonationExpenditure, ExpenditureType,
     DonationCertificate, CertificateType,
     ProjectUpdate, ProjectUpdateImage, ProjectUpdateVideo, UpdateType,
-    Notification, NotificationType
+    Notification, NotificationType,
+    BadgeLevel, BADGE_THRESHOLDS, BADGE_MIN_RECEIPT_TYPE,
+    ReceiptType, ReceiptRequestStatus,
+    UserHonorProfile, UserBadge, ReceiptRequest
 )
 
 
@@ -445,3 +448,292 @@ class NotificationAdmin(admin.ModelAdmin):
             '%d 条通知已标记为未读。',
             updated,
         ) % updated, messages.SUCCESS)
+
+
+@admin.register(UserHonorProfile)
+class UserHonorProfileAdmin(admin.ModelAdmin):
+    list_display = [
+        'user', 'love_points', 'total_donation_amount',
+        'consecutive_donation_days', 'current_badge_level_display',
+        'next_badge_threshold_display', 'points_to_next_display',
+        'last_donation_date', 'updated_at'
+    ]
+    list_filter = ['current_badge_level', 'updated_at', 'last_donation_date']
+    search_fields = ['user__username', 'user__email']
+    readonly_fields = [
+        'user', 'total_donation_amount', 'consecutive_donation_days',
+        'love_points', 'current_badge_level', 'last_donation_date',
+        'donation_points_display', 'streak_points_display',
+        'available_receipt_types_display', 'updated_at'
+    ]
+    actions = ['recalculate_honor']
+    fieldsets = (
+        ('基本信息', {
+            'fields': ('user', 'current_badge_level', 'love_points')
+        }),
+        ('数据明细', {
+            'fields': (
+                'total_donation_amount', 'donation_points_display',
+                'consecutive_donation_days', 'streak_points_display',
+                'last_donation_date'
+            )
+        }),
+        ('权限信息', {
+            'fields': ('available_receipt_types_display',),
+            'classes': ('collapse',)
+        }),
+        ('时间信息', {
+            'fields': ('updated_at',),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def current_badge_level_display(self, obj):
+        return obj.get_current_badge_level_display() or '无勋章'
+    current_badge_level_display.short_description = '当前勋章'
+    current_badge_level_display.admin_order_field = 'current_badge_level'
+
+    def donation_points_display(self, obj):
+        return obj.donation_points
+    donation_points_display.short_description = '捐赠贡献爱心值'
+
+    def streak_points_display(self, obj):
+        return obj.streak_points
+    streak_points_display.short_description = '连续捐赠爱心值'
+
+    def next_badge_threshold_display(self, obj):
+        level_order = list(BADGE_THRESHOLDS.keys())
+        if not obj.current_badge_level:
+            return f'{BADGE_THRESHOLDS.get(BadgeLevel.BRONZE, 0)} 爱心值'
+        try:
+            idx = level_order.index(obj.current_badge_level)
+            if idx + 1 < len(level_order):
+                next_level = level_order[idx + 1]
+                return f'{next_level.label}: {BADGE_THRESHOLDS.get(next_level, 0)} 爱心值'
+        except ValueError:
+            pass
+        return '已达最高等级'
+    next_badge_threshold_display.short_description = '下一等级阈值'
+
+    def points_to_next_display(self, obj):
+        level_order = list(BADGE_THRESHOLDS.keys())
+        if not obj.current_badge_level:
+            first_threshold = BADGE_THRESHOLDS.get(BadgeLevel.BRONZE, 0)
+            return max(0, first_threshold - obj.love_points)
+        try:
+            idx = level_order.index(obj.current_badge_level)
+            if idx + 1 < len(level_order):
+                next_level = level_order[idx + 1]
+                return max(0, BADGE_THRESHOLDS.get(next_level, 0) - obj.love_points)
+        except ValueError:
+            pass
+        return 0
+    points_to_next_display.short_description = '距离下一等级'
+
+    def available_receipt_types_display(self, obj):
+        from django.utils.html import format_html
+        items = []
+        for rt in [ReceiptType.ELECTRONIC, ReceiptType.PAPER, ReceiptType.PAPER_WITH_LETTER, ReceiptType.PAPER_WITH_GIFT]:
+            available = obj.can_request_receipt_type(rt)
+            status = '✓' if available else '✗'
+            color = 'green' if available else 'gray'
+            items.append(
+                format_html(
+                    '<span style="color:{};">{} {}</span>',
+                    color, status, rt.label
+                )
+            )
+        return format_html('<br>'.join(items))
+    available_receipt_types_display.short_description = '可申请收据类型'
+
+    @admin.action(description='重新计算荣誉档案')
+    def recalculate_honor(self, request, queryset):
+        updated = 0
+        for profile in queryset:
+            profile.recalculate()
+            updated += 1
+        self.message_user(request, ngettext(
+            '%d 个荣誉档案已重新计算。',
+            '%d 个荣誉档案已重新计算。',
+            updated,
+        ) % updated, messages.SUCCESS)
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(UserBadge)
+class UserBadgeAdmin(admin.ModelAdmin):
+    list_display = [
+        'id', 'user', 'badge_level_display', 'is_lit',
+        'threshold_display', 'earned_at'
+    ]
+    list_filter = ['badge_level', 'is_lit', 'earned_at']
+    search_fields = ['user__username', 'user__email']
+    readonly_fields = ['earned_at']
+    fieldsets = (
+        ('勋章信息', {
+            'fields': ('user', 'badge_level', 'is_lit')
+        }),
+        ('时间信息', {
+            'fields': ('earned_at',),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def badge_level_display(self, obj):
+        from django.utils.html import format_html
+        threshold = BADGE_THRESHOLDS.get(obj.badge_level, 0)
+        color_map = {
+            BadgeLevel.BRONZE: '#cd7f32',
+            BadgeLevel.SILVER: '#c0c0c0',
+            BadgeLevel.GOLD: '#ffd700',
+            BadgeLevel.DIAMOND: '#b9f2ff',
+        }
+        color = color_map.get(obj.badge_level, '#888')
+        status = '★' if obj.is_lit else '☆'
+        return format_html(
+            '<span style="color:{};">{} {} ({}爱心值)</span>',
+            color, status, obj.get_badge_level_display(), threshold
+        )
+    badge_level_display.short_description = '勋章等级'
+    badge_level_display.admin_order_field = 'badge_level'
+
+    def threshold_display(self, obj):
+        return f'{BADGE_THRESHOLDS.get(obj.badge_level, 0)} 爱心值'
+    threshold_display.short_description = '所需爱心值'
+
+
+@admin.register(ReceiptRequest)
+class ReceiptRequestAdmin(admin.ModelAdmin):
+    list_display = [
+        'id', 'user', 'receipt_type_display', 'total_amount',
+        'badge_level_at_request_display', 'love_points_at_request',
+        'status_display', 'tracking_number', 'created_at', 'reviewed_at'
+    ]
+    list_filter = [
+        'receipt_type', 'status', 'badge_level_at_request',
+        'created_at', 'reviewed_at', 'mailed_at'
+    ]
+    search_fields = [
+        'user__username', 'recipient_name', 'recipient_address',
+        'recipient_phone', 'tracking_number', 'reject_reason'
+    ]
+    readonly_fields = [
+        'love_points_at_request', 'badge_level_at_request',
+        'total_amount', 'created_at', 'updated_at', 'reviewed_at', 'mailed_at'
+    ]
+    filter_horizontal = ['donations']
+    actions = ['approve_receipt', 'reject_receipt', 'mark_as_mailed']
+    fieldsets = (
+        ('申请信息', {
+            'fields': (
+                'user', 'donations', 'total_amount',
+                'receipt_type', 'badge_level_at_request', 'love_points_at_request'
+            )
+        }),
+        ('收件信息', {
+            'fields': ('recipient_name', 'recipient_address', 'recipient_phone')
+        }),
+        ('审核信息', {
+            'fields': ('status', 'reject_reason', 'reviewer', 'reviewed_at')
+        }),
+        ('邮寄信息', {
+            'fields': ('tracking_number', 'mailed_at'),
+            'classes': ('collapse',)
+        }),
+        ('时间信息', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def receipt_type_display(self, obj):
+        return obj.get_receipt_type_display()
+    receipt_type_display.short_description = '收据类型'
+    receipt_type_display.admin_order_field = 'receipt_type'
+
+    def badge_level_at_request_display(self, obj):
+        return obj.get_badge_level_at_request_display() or '无勋章'
+    badge_level_at_request_display.short_description = '申请时勋章'
+    badge_level_at_request_display.admin_order_field = 'badge_level_at_request'
+
+    def status_display(self, obj):
+        from django.utils.html import format_html
+        status_colors = {
+            ReceiptRequestStatus.PENDING: '#f0ad4e',
+            ReceiptRequestStatus.APPROVED: '#5cb85c',
+            ReceiptRequestStatus.REJECTED: '#d9534f',
+            ReceiptRequestStatus.MAILED: '#5bc0de',
+        }
+        color = status_colors.get(obj.status, '#777')
+        return format_html(
+            '<span style="color:{}; font-weight:bold;">{}</span>',
+            color, obj.get_status_display()
+        )
+    status_display.short_description = '申请状态'
+    status_display.admin_order_field = 'status'
+
+    @admin.action(description='通过收据申请')
+    def approve_receipt(self, request, queryset):
+        from django.utils import timezone
+        updated = 0
+        for receipt_request in queryset:
+            if receipt_request.status == ReceiptRequestStatus.PENDING:
+                receipt_request.status = ReceiptRequestStatus.APPROVED
+                receipt_request.reviewer = request.user
+                receipt_request.reviewed_at = timezone.now()
+                receipt_request.save()
+                updated += 1
+        self.message_user(request, ngettext(
+            '%d 个收据申请已通过。',
+            '%d 个收据申请已通过。',
+            updated,
+        ) % updated, messages.SUCCESS)
+
+    @admin.action(description='拒绝收据申请')
+    def reject_receipt(self, request, queryset):
+        from django.utils import timezone
+        updated = 0
+        for receipt_request in queryset:
+            if receipt_request.status == ReceiptRequestStatus.PENDING:
+                receipt_request.status = ReceiptRequestStatus.REJECTED
+                receipt_request.reject_reason = '管理员批量拒绝'
+                receipt_request.reviewer = request.user
+                receipt_request.reviewed_at = timezone.now()
+                receipt_request.save()
+                updated += 1
+        self.message_user(request, ngettext(
+            '%d 个收据申请已拒绝。',
+            '%d 个收据申请已拒绝。',
+            updated,
+        ) % updated, messages.SUCCESS)
+
+    @admin.action(description='标记已邮寄')
+    def mark_as_mailed(self, request, queryset):
+        from django.utils import timezone
+        updated = 0
+        for receipt_request in queryset:
+            if receipt_request.status == ReceiptRequestStatus.APPROVED:
+                receipt_request.status = ReceiptRequestStatus.MAILED
+                receipt_request.mailed_at = timezone.now()
+                if not receipt_request.tracking_number:
+                    receipt_request.tracking_number = f'BATCH{receipt_request.id}'
+                receipt_request.save()
+                updated += 1
+        self.message_user(request, ngettext(
+            '%d 个收据申请已标记邮寄。',
+            '%d 个收据申请已标记邮寄。',
+            updated,
+        ) % updated, messages.SUCCESS)
+
+    def save_model(self, request, obj, form, change):
+        if change and 'status' in form.changed_data:
+            if obj.status in [ReceiptRequestStatus.APPROVED, ReceiptRequestStatus.REJECTED] and not obj.reviewer:
+                from django.utils import timezone
+                obj.reviewer = request.user
+                obj.reviewed_at = timezone.now()
+            if obj.status == ReceiptRequestStatus.MAILED and not obj.mailed_at:
+                from django.utils import timezone
+                obj.mailed_at = timezone.now()
+        super().save_model(request, obj, form, change)

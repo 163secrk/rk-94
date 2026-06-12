@@ -220,10 +220,12 @@ class Donation(models.Model):
                 self.transaction_id = transaction_id
             self._update_project_amount(self.amount)
             DonationCertificate.check_and_issue_for_donation(self)
+            UserHonorProfile.get_or_create_for_user(self.user).recalculate()
         elif new_status == DonationStatus.REFUNDED:
             self.refunded_at = timezone.now()
             if old_status == DonationStatus.PAID:
                 self._update_project_amount(-self.amount)
+                UserHonorProfile.get_or_create_for_user(self.user).recalculate()
 
         self.save()
         return self
@@ -285,6 +287,8 @@ class Donation(models.Model):
             if project.current_amount < project.target_amount and project.status == ProjectStatus.COMPLETED:
                 project.status = ProjectStatus.FUNDING
                 project.save()
+
+        UserHonorProfile.get_or_create_for_user(self.user).recalculate()
 
         self.save()
         return self
@@ -678,6 +682,284 @@ class Notification(models.Model):
             self.is_read = True
             self.read_at = timezone.now()
             self.save()
+
+
+class BadgeLevel(models.TextChoices):
+    BRONZE = 'bronze', _('铜心勋章')
+    SILVER = 'silver', _('银心勋章')
+    GOLD = 'gold', _('金心勋章')
+    DIAMOND = 'diamond', _('钻石心勋章')
+
+
+BADGE_THRESHOLDS = {
+    BadgeLevel.BRONZE: 100,
+    BadgeLevel.SILVER: 500,
+    BadgeLevel.GOLD: 2000,
+    BadgeLevel.DIAMOND: 5000,
+}
+
+BADGE_RECEIPT_PERMISSIONS = {
+    BadgeLevel.BRONZE: 'electronic',
+    BadgeLevel.SILVER: 'paper',
+    BadgeLevel.GOLD: 'paper_with_letter',
+    BadgeLevel.DIAMOND: 'paper_with_gift',
+}
+
+
+class ReceiptType(models.TextChoices):
+    ELECTRONIC = 'electronic', _('电子收据')
+    PAPER = 'paper', _('纸质收据')
+    PAPER_WITH_LETTER = 'paper_with_letter', _('纸质收据（含感谢信）')
+    PAPER_WITH_GIFT = 'paper_with_gift', _('纸质收据（含纪念品）')
+
+
+BADGE_MIN_RECEIPT_TYPE = {
+    BadgeLevel.BRONZE: ReceiptType.ELECTRONIC,
+    BadgeLevel.SILVER: ReceiptType.PAPER,
+    BadgeLevel.GOLD: ReceiptType.PAPER_WITH_LETTER,
+    BadgeLevel.DIAMOND: ReceiptType.PAPER_WITH_GIFT,
+}
+
+
+class UserHonorProfile(models.Model):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='honor_profile',
+        verbose_name='用户'
+    )
+    total_donation_amount = models.DecimalField(
+        max_digits=14, decimal_places=2, default=Decimal('0.00'),
+        verbose_name='累计捐赠金额（元）'
+    )
+    consecutive_donation_days = models.IntegerField(default=0, verbose_name='连续捐赠天数')
+    love_points = models.IntegerField(default=0, verbose_name='爱心值')
+    current_badge_level = models.CharField(
+        max_length=20,
+        choices=BadgeLevel.choices,
+        blank=True, null=True,
+        verbose_name='当前勋章等级'
+    )
+    last_donation_date = models.DateField(blank=True, null=True, verbose_name='最后捐赠日期')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '用户荣誉档案'
+        verbose_name_plural = verbose_name
+
+    def __str__(self):
+        badge_display = self.get_current_badge_level_display() or '无勋章'
+        return f'{self.user.username} - 爱心值{self.love_points} - {badge_display}'
+
+    @property
+    def donation_points(self):
+        return int(self.total_donation_amount)
+
+    @property
+    def streak_points(self):
+        return self.consecutive_donation_days * 2
+
+    def recalculate(self):
+        from django.db.models import Sum, Min
+
+        paid_donations = Donation.objects.filter(
+            user=self.user, status=DonationStatus.PAID
+        )
+
+        self.total_donation_amount = paid_donations.aggregate(
+            total=Sum('amount')
+        )['total'] or Decimal('0')
+
+        donation_dates = list(
+            paid_donations.values_list('paid_at__date', flat=True)
+            .distinct().order_by('-paid_at__date')
+        )
+
+        self.consecutive_donation_days = self._calculate_streak(donation_dates)
+
+        if donation_dates:
+            self.last_donation_date = donation_dates[0]
+
+        self.love_points = self.donation_points + self.streak_points
+
+        old_badge = self.current_badge_level
+        new_badge = self._compute_badge_level()
+        self.current_badge_level = new_badge
+
+        self.save()
+
+        if new_badge != old_badge:
+            self._sync_badges()
+
+    def _calculate_streak(self, donation_dates):
+        if not donation_dates:
+            return 0
+
+        from django.utils import timezone as tz
+        today = tz.now().date()
+
+        streak = 0
+        expected_date = today
+
+        for d in donation_dates:
+            if d == expected_date:
+                streak += 1
+                expected_date = d - __import__('datetime').timedelta(days=1)
+            elif d == expected_date - __import__('datetime').timedelta(days=1):
+                streak += 1
+                expected_date = d - __import__('datetime').timedelta(days=1)
+            else:
+                break
+
+        if streak == 0 and donation_dates[0] >= today - __import__('datetime').timedelta(days=1):
+            streak = 1
+
+        return streak
+
+    def _compute_badge_level(self):
+        level = None
+        for badge_level, threshold in BADGE_THRESHOLDS.items():
+            if self.love_points >= threshold:
+                level = badge_level
+        return level
+
+    def _sync_badges(self):
+        if not self.current_badge_level:
+            return
+
+        earned_levels = set(
+            UserBadge.objects.filter(user=self.user, is_lit=True)
+            .values_list('badge_level', flat=True)
+        )
+
+        for badge_level, threshold in BADGE_THRESHOLDS.items():
+            if self.love_points >= threshold:
+                if badge_level not in earned_levels:
+                    UserBadge.objects.create(
+                        user=self.user,
+                        badge_level=badge_level,
+                        is_lit=True
+                    )
+
+    def can_request_receipt_type(self, receipt_type):
+        if not self.current_badge_level:
+            return False
+
+        level_order = list(BADGE_THRESHOLDS.keys())
+        user_idx = level_order.index(self.current_badge_level) if self.current_badge_level in level_order else -1
+
+        type_order = [ReceiptType.ELECTRONIC, ReceiptType.PAPER, ReceiptType.PAPER_WITH_LETTER, ReceiptType.PAPER_WITH_GIFT]
+        type_idx = type_order.index(receipt_type) if receipt_type in type_order else len(type_order)
+
+        min_badge_for_type = None
+        for bl, rt in BADGE_MIN_RECEIPT_TYPE.items():
+            if rt == receipt_type:
+                min_badge_for_type = bl
+                break
+
+        if min_badge_for_type is None:
+            return False
+
+        min_idx = level_order.index(min_badge_for_type)
+        return user_idx >= min_idx
+
+    @classmethod
+    def get_or_create_for_user(cls, user):
+        profile, created = cls.objects.get_or_create(user=user)
+        if created or profile.love_points == 0:
+            profile.recalculate()
+        return profile
+
+
+class UserBadge(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='badges',
+        verbose_name='用户'
+    )
+    badge_level = models.CharField(
+        max_length=20,
+        choices=BadgeLevel.choices,
+        verbose_name='勋章等级'
+    )
+    is_lit = models.BooleanField(default=True, verbose_name='是否点亮')
+    earned_at = models.DateTimeField(auto_now_add=True, verbose_name='获得时间')
+
+    class Meta:
+        verbose_name = '用户勋章'
+        verbose_name_plural = verbose_name
+        unique_together = [['user', 'badge_level']]
+        ordering = ['earned_at']
+
+    def __str__(self):
+        status = '已点亮' if self.is_lit else '未点亮'
+        return f'{self.user.username} - {self.get_badge_level_display()} ({status})'
+
+
+class ReceiptRequestStatus(models.TextChoices):
+    PENDING = 'pending', _('待审核')
+    APPROVED = 'approved', _('已通过')
+    REJECTED = 'rejected', _('已拒绝')
+    MAILED = 'mailed', _('已邮寄')
+
+
+class ReceiptRequest(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='receipt_requests',
+        verbose_name='申请人'
+    )
+    donations = models.ManyToManyField(
+        Donation,
+        related_name='receipt_requests',
+        verbose_name='关联捐赠'
+    )
+    receipt_type = models.CharField(
+        max_length=30,
+        choices=ReceiptType.choices,
+        verbose_name='收据类型'
+    )
+    badge_level_at_request = models.CharField(
+        max_length=20,
+        choices=BadgeLevel.choices,
+        verbose_name='申请时勋章等级'
+    )
+    love_points_at_request = models.IntegerField(verbose_name='申请时爱心值')
+    total_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, verbose_name='收据金额合计（元）'
+    )
+    recipient_name = models.CharField(max_length=100, verbose_name='收件人姓名')
+    recipient_address = models.CharField(max_length=500, verbose_name='收件地址')
+    recipient_phone = models.CharField(max_length=20, verbose_name='联系电话')
+    status = models.CharField(
+        max_length=20,
+        choices=ReceiptRequestStatus.choices,
+        default=ReceiptRequestStatus.PENDING,
+        verbose_name='申请状态'
+    )
+    reject_reason = models.TextField(blank=True, null=True, verbose_name='拒绝原因')
+    reviewer = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        blank=True, null=True,
+        related_name='reviewed_receipt_requests',
+        verbose_name='审核人'
+    )
+    reviewed_at = models.DateTimeField(blank=True, null=True, verbose_name='审核时间')
+    tracking_number = models.CharField(max_length=100, blank=True, null=True, verbose_name='快递单号')
+    mailed_at = models.DateTimeField(blank=True, null=True, verbose_name='邮寄时间')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='申请时间')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
+
+    class Meta:
+        verbose_name = '捐赠收据申请'
+        verbose_name_plural = verbose_name
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.user.username} - {self.get_receipt_type_display()} - {self.get_status_display()}'
 
 
 class CertificateType(models.TextChoices):

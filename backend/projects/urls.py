@@ -40,7 +40,19 @@ from .views import (
     NotificationListView,
     NotificationUnreadCountView,
     NotificationMarkReadView,
-    NotificationDetailView
+    NotificationDetailView,
+    MyHonorProfileView,
+    MyBadgesListView,
+    BadgeDefinitionsView,
+    RecalculateHonorView,
+    ReceiptRequestCreateView,
+    MyReceiptRequestListView,
+    ReceiptRequestListView,
+    ReceiptRequestDetailView,
+    ReceiptRequestReviewView,
+    ReceiptRequestMailingView,
+    UserHonorProfileDetailView,
+    UserBadgesListView
 )
 
 urlpatterns = [
@@ -94,4 +106,18 @@ urlpatterns = [
     path('notifications/unread-count/', NotificationUnreadCountView.as_view(), name='notification_unread_count'),
     path('notifications/mark-read/', NotificationMarkReadView.as_view(), name='notification_mark_read'),
     path('notifications/<int:pk>/', NotificationDetailView.as_view(), name='notification_detail'),
+
+    path('honor/my/', MyHonorProfileView.as_view(), name='my_honor_profile'),
+    path('honor/my/badges/', MyBadgesListView.as_view(), name='my_badges_list'),
+    path('honor/recalculate/', RecalculateHonorView.as_view(), name='honor_recalculate'),
+    path('honor/badges/definitions/', BadgeDefinitionsView.as_view(), name='badge_definitions'),
+    path('honor/profiles/<int:pk>/', UserHonorProfileDetailView.as_view(), name='user_honor_profile'),
+    path('honor/users/<int:user_id>/badges/', UserBadgesListView.as_view(), name='user_badges_list'),
+
+    path('receipts/', ReceiptRequestCreateView.as_view(), name='receipt_request_create'),
+    path('receipts/my/', MyReceiptRequestListView.as_view(), name='my_receipt_request_list'),
+    path('receipts/pending/', ReceiptRequestListView.as_view(), name='receipt_request_list'),
+    path('receipts/<int:pk>/', ReceiptRequestDetailView.as_view(), name='receipt_request_detail'),
+    path('receipts/<int:pk>/review/', ReceiptRequestReviewView.as_view(), name='receipt_request_review'),
+    path('receipts/<int:pk>/mail/', ReceiptRequestMailingView.as_view(), name='receipt_request_mail'),
 ]

@@ -10,7 +10,10 @@ from .models import (
     Expenditure, ExpenditureInvoice, DonationExpenditure,
     DonationCertificate, CertificateType,
     ProjectUpdate, ProjectUpdateImage, ProjectUpdateVideo, UpdateType,
-    Notification, NotificationType
+    Notification, NotificationType,
+    BadgeLevel, BADGE_THRESHOLDS, BADGE_MIN_RECEIPT_TYPE,
+    ReceiptType, ReceiptRequestStatus,
+    UserHonorProfile, UserBadge, ReceiptRequest
 )
 from .serializers import (
     ProjectListSerializer,
@@ -42,7 +45,15 @@ from .serializers import (
     ProjectUpdateCreateSerializer,
     NotificationSerializer,
     NotificationMarkReadSerializer,
-    MySupportedProjectUpdateSerializer
+    MySupportedProjectUpdateSerializer,
+    UserBadgeSerializer,
+    BadgeDefinitionSerializer,
+    UserHonorProfileSerializer,
+    ReceiptRequestCreateSerializer,
+    ReceiptRequestListSerializer,
+    ReceiptRequestDetailSerializer,
+    ReceiptRequestReviewSerializer,
+    ReceiptRequestMailingSerializer
 )
 
 
@@ -1104,6 +1115,303 @@ class NotificationDetailView(generics.RetrieveAPIView):
             instance.mark_as_read()
 
         serializer = self.get_serializer(instance)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class MyHonorProfileView(generics.RetrieveAPIView):
+    serializer_class = UserHonorProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        return UserHonorProfile.get_or_create_for_user(self.request.user)
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class MyBadgesListView(generics.ListAPIView):
+    serializer_class = UserBadgeSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return UserBadge.objects.filter(user=self.request.user).order_by('earned_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        earned = {b.badge_level: b for b in queryset}
+        result = []
+        for badge_level in BadgeLevel:
+            if badge_level in earned:
+                result.append(earned[badge_level])
+            else:
+                result.append(UserBadge(
+                    user=request.user,
+                    badge_level=badge_level,
+                    is_lit=False,
+                    earned_at=None
+                ))
+        serializer = self.get_serializer(result, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class BadgeDefinitionsView(generics.GenericAPIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        data = []
+        user = request.user if request.user.is_authenticated else None
+        if user:
+            earned = set(
+                UserBadge.objects.filter(user=user, is_lit=True).values_list('badge_level', flat=True)
+            )
+            user_badges = {b.badge_level: b for b in UserBadge.objects.filter(user=user)}
+        else:
+            earned = set()
+            user_badges = {}
+
+        for badge_level, threshold in BADGE_THRESHOLDS.items():
+            min_receipt_type = BADGE_MIN_RECEIPT_TYPE.get(badge_level)
+            data.append({
+                'badge_level': badge_level,
+                'badge_level_display': badge_level.label,
+                'threshold': threshold,
+                'receipt_type': min_receipt_type,
+                'receipt_type_display': min_receipt_type.label if min_receipt_type else None,
+                'is_earned': badge_level in earned,
+                'is_lit': user_badges.get(badge_level, UserBadge(is_lit=False)).is_lit
+            })
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': data
+        })
+
+
+class RecalculateHonorView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        profile = UserHonorProfile.get_or_create_for_user(request.user)
+        profile.recalculate()
+        serializer = UserHonorProfileSerializer(profile)
+        return Response({
+            'code': 200,
+            'message': '重新计算成功',
+            'data': serializer.data
+        })
+
+
+class ReceiptRequestCreateView(generics.CreateAPIView):
+    serializer_class = ReceiptRequestCreateSerializer
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated = serializer.validated_data
+        donations = validated['donations']
+        honor_profile = validated['honor_profile']
+
+        total_amount = sum(d.amount for d in donations)
+
+        receipt_request = ReceiptRequest.objects.create(
+            user=request.user,
+            receipt_type=validated['receipt_type'],
+            badge_level_at_request=honor_profile.current_badge_level,
+            love_points_at_request=honor_profile.love_points,
+            total_amount=total_amount,
+            recipient_name=validated['recipient_name'],
+            recipient_address=validated['recipient_address'],
+            recipient_phone=validated['recipient_phone'],
+            status=ReceiptRequestStatus.PENDING
+        )
+        receipt_request.donations.set(donations)
+
+        detail_serializer = ReceiptRequestDetailSerializer(receipt_request)
+        return Response({
+            'code': 200,
+            'message': '收据申请提交成功，请等待审核',
+            'data': detail_serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+
+class MyReceiptRequestListView(generics.ListAPIView):
+    serializer_class = ReceiptRequestListSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return ReceiptRequest.objects.filter(user=self.request.user).order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class ReceiptRequestListView(generics.ListAPIView):
+    serializer_class = ReceiptRequestListSerializer
+    permission_classes = [IsAuthenticated, IsAuditor]
+
+    def get_queryset(self):
+        return ReceiptRequest.objects.all().order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        status_filter = request.query_params.get('status', 'pending')
+        if status_filter != 'all':
+            queryset = queryset.filter(status=status_filter)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class ReceiptRequestDetailView(generics.RetrieveAPIView):
+    serializer_class = ReceiptRequestDetailSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = ReceiptRequest.objects.all()
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.user != request.user and request.user.role not in ['auditor', 'admin']:
+            return Response({
+                'code': 403,
+                'message': '无权查看该收据申请'
+            }, status=status.HTTP_403_FORBIDDEN)
+        serializer = self.get_serializer(instance)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class ReceiptRequestReviewView(generics.GenericAPIView):
+    serializer_class = ReceiptRequestReviewSerializer
+    permission_classes = [IsAuthenticated, IsAuditor]
+    queryset = ReceiptRequest.objects.all()
+
+    def post(self, request, *args, **kwargs):
+        receipt_request = self.get_object()
+        if receipt_request.status != ReceiptRequestStatus.PENDING:
+            return Response({
+                'code': 400,
+                'message': '该申请已处理，无法重复审核'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = serializer.validated_data
+
+        action = validated_data['action']
+        if action == 'approve':
+            receipt_request.status = ReceiptRequestStatus.APPROVED
+        else:
+            receipt_request.status = ReceiptRequestStatus.REJECTED
+            receipt_request.reject_reason = validated_data.get('reject_reason', '')
+
+        receipt_request.reviewer = request.user
+        receipt_request.reviewed_at = timezone.now()
+        receipt_request.save()
+
+        detail_serializer = ReceiptRequestDetailSerializer(receipt_request)
+        return Response({
+            'code': 200,
+            'message': f'收据申请已{"通过" if action == "approve" else "拒绝"}',
+            'data': detail_serializer.data
+        })
+
+
+class ReceiptRequestMailingView(generics.GenericAPIView):
+    serializer_class = ReceiptRequestMailingSerializer
+    permission_classes = [IsAuthenticated, IsAuditor]
+    queryset = ReceiptRequest.objects.all()
+
+    def post(self, request, *args, **kwargs):
+        receipt_request = self.get_object()
+        if receipt_request.status != ReceiptRequestStatus.APPROVED:
+            return Response({
+                'code': 400,
+                'message': '只有已通过的申请可以标记邮寄'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        receipt_request.tracking_number = serializer.validated_data['tracking_number']
+        receipt_request.status = ReceiptRequestStatus.MAILED
+        receipt_request.mailed_at = timezone.now()
+        receipt_request.save()
+
+        detail_serializer = ReceiptRequestDetailSerializer(receipt_request)
+        return Response({
+            'code': 200,
+            'message': '已标记为邮寄',
+            'data': detail_serializer.data
+        })
+
+
+class UserHonorProfileDetailView(generics.RetrieveAPIView):
+    serializer_class = UserHonorProfileSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = UserHonorProfile.objects.all()
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.user != request.user and request.user.role not in ['auditor', 'admin']:
+            return Response({
+                'code': 403,
+                'message': '无权查看该用户荣誉档案'
+            }, status=status.HTTP_403_FORBIDDEN)
+        serializer = self.get_serializer(instance)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class UserBadgesListView(generics.ListAPIView):
+    serializer_class = UserBadgeSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user_id = self.kwargs.get('user_id')
+        return UserBadge.objects.filter(user_id=user_id, is_lit=True).order_by('earned_at')
+
+    def list(self, request, *args, **kwargs):
+        user_id = self.kwargs.get('user_id')
+        if request.user.id != user_id and request.user.role not in ['auditor', 'admin']:
+            return Response({
+                'code': 403,
+                'message': '无权查看该用户勋章'
+            }, status=status.HTTP_403_FORBIDDEN)
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
         return Response({
             'code': 200,
             'message': '获取成功',

@@ -10,7 +10,10 @@ from .models import (
     Expenditure, ExpenditureInvoice, DonationExpenditure, ExpenditureType,
     DonationCertificate, CertificateType,
     ProjectUpdate, ProjectUpdateImage, ProjectUpdateVideo, UpdateType,
-    Notification, NotificationType
+    Notification, NotificationType,
+    BadgeLevel, BADGE_THRESHOLDS, BADGE_MIN_RECEIPT_TYPE,
+    ReceiptType, ReceiptRequestStatus,
+    UserHonorProfile, UserBadge, ReceiptRequest
 )
 
 User = get_user_model()
@@ -698,3 +701,193 @@ class MySupportedProjectUpdateSerializer(serializers.ModelSerializer):
 
     def get_videos_count(self, obj):
         return obj.videos.count()
+
+
+class UserBadgeSerializer(serializers.ModelSerializer):
+    badge_level_display = serializers.CharField(source='get_badge_level_display', read_only=True)
+    threshold = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserBadge
+        fields = ['id', 'badge_level', 'badge_level_display', 'is_lit', 'earned_at', 'threshold']
+
+    def get_threshold(self, obj):
+        return BADGE_THRESHOLDS.get(obj.badge_level, 0)
+
+
+class BadgeDefinitionSerializer(serializers.Serializer):
+    badge_level = serializers.CharField()
+    badge_level_display = serializers.CharField()
+    threshold = serializers.IntegerField()
+    receipt_type = serializers.CharField()
+    receipt_type_display = serializers.CharField()
+    is_earned = serializers.BooleanField()
+    is_lit = serializers.BooleanField()
+
+
+class UserHonorProfileSerializer(serializers.ModelSerializer):
+    badge_level_display = serializers.CharField(source='get_current_badge_level_display', read_only=True)
+    donation_points = serializers.IntegerField(read_only=True)
+    streak_points = serializers.IntegerField(read_only=True)
+    next_badge_level = serializers.SerializerMethodField()
+    next_badge_threshold = serializers.SerializerMethodField()
+    points_to_next = serializers.SerializerMethodField()
+    available_receipt_types = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserHonorProfile
+        fields = [
+            'love_points', 'total_donation_amount', 'consecutive_donation_days',
+            'current_badge_level', 'badge_level_display',
+            'donation_points', 'streak_points',
+            'last_donation_date',
+            'next_badge_level', 'next_badge_threshold', 'points_to_next',
+            'available_receipt_types', 'updated_at'
+        ]
+
+    def get_next_badge_level(self, obj):
+        level_order = list(BADGE_THRESHOLDS.keys())
+        if not obj.current_badge_level:
+            return BadgeLevel.BRONZE.label if BADGE_THRESHOLDS else None
+        try:
+            idx = level_order.index(obj.current_badge_level)
+            if idx + 1 < len(level_order):
+                return level_order[idx + 1].label
+        except ValueError:
+            pass
+        return None
+
+    def get_next_badge_threshold(self, obj):
+        level_order = list(BADGE_THRESHOLDS.keys())
+        if not obj.current_badge_level:
+            return BADGE_THRESHOLDS.get(BadgeLevel.BRONZE, 0)
+        try:
+            idx = level_order.index(obj.current_badge_level)
+            if idx + 1 < len(level_order):
+                next_level = level_order[idx + 1]
+                return BADGE_THRESHOLDS.get(next_level, 0)
+        except ValueError:
+            pass
+        return None
+
+    def get_points_to_next(self, obj):
+        level_order = list(BADGE_THRESHOLDS.keys())
+        if not obj.current_badge_level:
+            first_threshold = BADGE_THRESHOLDS.get(BadgeLevel.BRONZE, 0)
+            return max(0, first_threshold - obj.love_points)
+        try:
+            idx = level_order.index(obj.current_badge_level)
+            if idx + 1 < len(level_order):
+                next_level = level_order[idx + 1]
+                return max(0, BADGE_THRESHOLDS.get(next_level, 0) - obj.love_points)
+        except ValueError:
+            pass
+        return 0
+
+    def get_available_receipt_types(self, obj):
+        result = []
+        for rt in [ReceiptType.ELECTRONIC, ReceiptType.PAPER, ReceiptType.PAPER_WITH_LETTER, ReceiptType.PAPER_WITH_GIFT]:
+            result.append({
+                'value': rt.value,
+                'label': rt.label,
+                'available': obj.can_request_receipt_type(rt),
+            })
+        return result
+
+
+class ReceiptRequestCreateSerializer(serializers.Serializer):
+    donation_ids = serializers.ListField(
+        child=serializers.IntegerField(), required=True
+    )
+    receipt_type = serializers.ChoiceField(choices=ReceiptType.choices, required=True)
+    recipient_name = serializers.CharField(max_length=100, required=True)
+    recipient_address = serializers.CharField(max_length=500, required=True)
+    recipient_phone = serializers.CharField(max_length=20, required=True)
+
+    def validate_donation_ids(self, value):
+        if not value:
+            raise serializers.ValidationError('请选择至少一条捐赠记录')
+        return value
+
+    def validate(self, attrs):
+        user = self.context['request'].user
+        donations = Donation.objects.filter(
+            id__in=attrs['donation_ids'],
+            user=user,
+            status=DonationStatus.PAID
+        )
+        if donations.count() != len(attrs['donation_ids']):
+            raise serializers.ValidationError('存在无效的捐赠记录')
+
+        existing_pending = ReceiptRequest.objects.filter(
+            user=user,
+            status__in=[ReceiptRequestStatus.PENDING, ReceiptRequestStatus.APPROVED],
+            donations__id__in=attrs['donation_ids']
+        ).exists()
+        if existing_pending:
+            raise serializers.ValidationError('所选捐赠记录中存在已申请收据的记录')
+
+        honor_profile = UserHonorProfile.get_or_create_for_user(user)
+        if not honor_profile.can_request_receipt_type(attrs['receipt_type']):
+            raise serializers.ValidationError(
+                f'当前勋章等级无法申请{dict(ReceiptType.choices)[attrs["receipt_type"]]}，'
+                f'请提升爱心值以解锁更高权限'
+            )
+
+        attrs['donations'] = donations
+        attrs['honor_profile'] = honor_profile
+        return attrs
+
+
+class ReceiptRequestListSerializer(serializers.ModelSerializer):
+    receipt_type_display = serializers.CharField(source='get_receipt_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    badge_level_display = serializers.CharField(source='get_badge_level_at_request_display', read_only=True)
+    donation_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReceiptRequest
+        fields = [
+            'id', 'receipt_type', 'receipt_type_display',
+            'badge_level_at_request', 'badge_level_display',
+            'love_points_at_request', 'total_amount',
+            'recipient_name', 'status', 'status_display',
+            'reject_reason', 'reviewed_at', 'tracking_number', 'mailed_at',
+            'donation_count', 'created_at', 'updated_at'
+        ]
+
+    def get_donation_count(self, obj):
+        return obj.donations.count()
+
+
+class ReceiptRequestDetailSerializer(serializers.ModelSerializer):
+    receipt_type_display = serializers.CharField(source='get_receipt_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    badge_level_display = serializers.CharField(source='get_badge_level_at_request_display', read_only=True)
+    donations = DonationListSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ReceiptRequest
+        fields = [
+            'id', 'receipt_type', 'receipt_type_display',
+            'badge_level_at_request', 'badge_level_display',
+            'love_points_at_request', 'total_amount',
+            'recipient_name', 'recipient_address', 'recipient_phone',
+            'status', 'status_display', 'reject_reason',
+            'reviewer', 'reviewed_at', 'tracking_number', 'mailed_at',
+            'donations', 'created_at', 'updated_at'
+        ]
+
+
+class ReceiptRequestReviewSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=[('approve', '通过'), ('reject', '拒绝')])
+    reject_reason = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+
+    def validate(self, attrs):
+        if attrs.get('action') == 'reject' and not attrs.get('reject_reason'):
+            raise serializers.ValidationError({'reject_reason': '拒绝时必须填写原因'})
+        return attrs
+
+
+class ReceiptRequestMailingSerializer(serializers.Serializer):
+    tracking_number = serializers.CharField(max_length=100, required=True)
