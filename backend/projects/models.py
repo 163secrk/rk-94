@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+from django.conf import settings
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.contrib.auth import get_user_model
@@ -216,6 +219,7 @@ class Donation(models.Model):
             if transaction_id:
                 self.transaction_id = transaction_id
             self._update_project_amount(self.amount)
+            DonationCertificate.check_and_issue_for_donation(self)
         elif new_status == DonationStatus.REFUNDED:
             self.refunded_at = timezone.now()
             if old_status == DonationStatus.PAID:
@@ -233,6 +237,7 @@ class Donation(models.Model):
         if project.current_amount >= project.target_amount and project.status == ProjectStatus.FUNDING:
             project.status = ProjectStatus.COMPLETED
             project.save()
+            DonationCertificate.check_and_issue_for_project_success(project)
 
     @transaction.atomic
     def refund(self, refund_transaction_id=None):
@@ -510,3 +515,142 @@ class RefundRequest(models.Model):
         self.save()
 
         return self
+
+
+class CertificateType(models.TextChoices):
+    DONATION_THRESHOLD = 'donation_threshold', _('大额捐赠证书')
+    PROJECT_SUCCESS = 'project_success', _('项目筹款成功证书')
+
+
+class DonationCertificate(models.Model):
+    certificate_no = models.CharField(max_length=64, unique=True, verbose_name='证书编号')
+    certificate_type = models.CharField(
+        max_length=30,
+        choices=CertificateType.choices,
+        verbose_name='证书类型'
+    )
+    donation = models.ForeignKey(
+        Donation,
+        on_delete=models.CASCADE,
+        related_name='certificates',
+        verbose_name='关联捐赠'
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='donation_certificates',
+        verbose_name='捐赠人'
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='certificates',
+        verbose_name='所属项目'
+    )
+    donation_amount = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='捐赠金额（元）')
+    integrity_hash = models.CharField(max_length=128, verbose_name='完整性校验哈希')
+    issued_at = models.DateTimeField(auto_now_add=True, verbose_name='颁发时间')
+
+    class Meta:
+        verbose_name = '捐赠证书'
+        verbose_name_plural = verbose_name
+        ordering = ['-issued_at']
+
+    def __str__(self):
+        return f'{self.certificate_no} - {self.user.username}'
+
+    @classmethod
+    def _get_certificate_secret(cls):
+        return getattr(settings, 'CERTIFICATE_HMAC_SECRET', settings.SECRET_KEY)
+
+    @classmethod
+    def generate_certificate_no(cls, project_id, date_str=None):
+        from django.utils import timezone as tz
+
+        if date_str is None:
+            date_str = tz.now().strftime('%Y%m%d')
+
+        prefix = f'PRJ{project_id:04d}'
+        date_part = date_str
+
+        with transaction.atomic():
+            existing_count = cls.objects.filter(
+                certificate_no__startswith=f'{prefix}-{date_part}-'
+            ).select_for_update().count()
+
+            seq = existing_count + 1
+            certificate_no = f'{prefix}-{date_part}-{seq:04d}'
+
+            while cls.objects.filter(certificate_no=certificate_no).exists():
+                seq += 1
+                certificate_no = f'{prefix}-{date_part}-{seq:04d}'
+
+        return certificate_no
+
+    @classmethod
+    def compute_integrity_hash(cls, certificate_no, donation_id, user_id, project_id, donation_amount, issued_at_str):
+        secret = cls._get_certificate_secret().encode('utf-8')
+        message = f'{certificate_no}|{donation_id}|{user_id}|{project_id}|{donation_amount}|{issued_at_str}'
+        return hmac.new(secret, message.encode('utf-8'), hashlib.sha256).hexdigest()
+
+    def verify_integrity(self):
+        issued_at_str = self.issued_at.strftime('%Y-%m-%d %H:%M:%S.%f')
+        expected_hash = self.compute_integrity_hash(
+            self.certificate_no,
+            self.donation_id,
+            self.user_id,
+            self.project_id,
+            str(self.donation_amount),
+            issued_at_str
+        )
+        return hmac.compare_digest(self.integrity_hash, expected_hash)
+
+    @classmethod
+    @transaction.atomic
+    def issue_certificate(cls, donation, certificate_type):
+        from django.utils import timezone as tz
+
+        if cls.objects.filter(donation=donation, certificate_type=certificate_type).exists():
+            return None
+
+        certificate_no = cls.generate_certificate_no(donation.project_id)
+
+        cert = cls(
+            certificate_no=certificate_no,
+            certificate_type=certificate_type,
+            donation=donation,
+            user=donation.user,
+            project=donation.project,
+            donation_amount=donation.amount,
+        )
+        cert.save()
+
+        issued_at_str = cert.issued_at.strftime('%Y-%m-%d %H:%M:%S.%f')
+        cert.integrity_hash = cls.compute_integrity_hash(
+            cert.certificate_no,
+            cert.donation_id,
+            cert.user_id,
+            cert.project_id,
+            str(cert.donation_amount),
+            issued_at_str
+        )
+        cert.save(update_fields=['integrity_hash'])
+
+        return cert
+
+    @classmethod
+    def check_and_issue_for_donation(cls, donation):
+        threshold = Decimal(getattr(settings, 'CERTIFICATE_DONATION_THRESHOLD', '1000'))
+
+        if donation.amount >= threshold:
+            cls.issue_certificate(donation, CertificateType.DONATION_THRESHOLD)
+
+    @classmethod
+    def check_and_issue_for_project_success(cls, project):
+        paid_donations = Donation.objects.filter(
+            project=project,
+            status=DonationStatus.PAID
+        )
+
+        for donation in paid_donations:
+            cls.issue_certificate(donation, CertificateType.PROJECT_SUCCESS)

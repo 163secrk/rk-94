@@ -27,7 +27,11 @@ from .views import (
     DonationExpenditureAllocateView,
     DonationTrackingView,
     ProjectExpenditureSummaryView,
-    AvailableDonationsForAllocationView
+    AvailableDonationsForAllocationView,
+    MyCertificateListView,
+    CertificateDetailView,
+    CertificateVerifyView,
+    ProjectCertificateListView
 )
 
 urlpatterns = [
@@ -64,4 +68,9 @@ urlpatterns = [
     path('expenditures/<int:expenditure_id>/available-donations/', AvailableDonationsForAllocationView.as_view(), name='expenditure_available_donations'),
 
     path('allocations/', DonationExpenditureAllocateView.as_view(), name='allocation_create'),
+
+    path('certificates/my/', MyCertificateListView.as_view(), name='certificate_my_list'),
+    path('certificates/verify/', CertificateVerifyView.as_view(), name='certificate_verify'),
+    path('certificates/<int:pk>/', CertificateDetailView.as_view(), name='certificate_detail'),
+    path('<int:project_id>/certificates/', ProjectCertificateListView.as_view(), name='project_certificate_list'),
 ]

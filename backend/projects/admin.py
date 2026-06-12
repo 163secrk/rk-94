@@ -4,7 +4,8 @@ from django.utils.translation import ngettext
 from .models import (
     Project, ProjectBudget, Donation, RefundRequest,
     ProjectStatus, RefundRequestStatus,
-    Expenditure, ExpenditureInvoice, DonationExpenditure, ExpenditureType
+    Expenditure, ExpenditureInvoice, DonationExpenditure, ExpenditureType,
+    DonationCertificate, CertificateType
 )
 
 
@@ -269,3 +270,46 @@ class DonationExpenditureAdmin(admin.ModelAdmin):
         if not obj.allocated_by:
             obj.allocated_by = request.user
         super().save_model(request, obj, form, change)
+
+
+@admin.register(DonationCertificate)
+class DonationCertificateAdmin(admin.ModelAdmin):
+    list_display = ['certificate_no', 'certificate_type_display', 'user', 'project_title', 'donation_amount', 'integrity_status', 'issued_at']
+    list_filter = ['certificate_type', 'issued_at']
+    search_fields = ['certificate_no', 'user__username', 'project__title']
+    readonly_fields = ['certificate_no', 'certificate_type', 'donation', 'user', 'project', 'donation_amount', 'integrity_hash', 'integrity_status', 'issued_at']
+    fieldsets = (
+        ('证书信息', {
+            'fields': ('certificate_no', 'certificate_type', 'donation_amount', 'issued_at')
+        }),
+        ('关联信息', {
+            'fields': ('donation', 'user', 'project')
+        }),
+        ('安全信息', {
+            'fields': ('integrity_hash', 'integrity_status'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def certificate_type_display(self, obj):
+        return obj.get_certificate_type_display()
+    certificate_type_display.short_description = '证书类型'
+    certificate_type_display.admin_order_field = 'certificate_type'
+
+    def project_title(self, obj):
+        return obj.project.title
+    project_title.short_description = '所属项目'
+    project_title.admin_order_field = 'project__title'
+
+    def integrity_status(self, obj):
+        return '✓ 有效' if obj.verify_integrity() else '✗ 已被篡改'
+    integrity_status.short_description = '完整性校验'
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

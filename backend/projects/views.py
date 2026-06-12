@@ -7,7 +7,8 @@ from decimal import Decimal, InvalidOperation
 from .models import (
     Project, ProjectStatus, Donation, DonationStatus,
     RefundRequest, RefundRequestStatus,
-    Expenditure, ExpenditureInvoice, DonationExpenditure
+    Expenditure, ExpenditureInvoice, DonationExpenditure,
+    DonationCertificate, CertificateType
 )
 from .serializers import (
     ProjectListSerializer,
@@ -30,7 +31,10 @@ from .serializers import (
     DonationExpenditureCreateSerializer,
     DonationExpenditureDetailSerializer,
     DonationTrackingSerializer,
-    ProjectExpenditureSummarySerializer
+    ProjectExpenditureSummarySerializer,
+    DonationCertificateListSerializer,
+    DonationCertificateDetailSerializer,
+    CertificateVerifySerializer
 )
 
 
@@ -753,6 +757,103 @@ class AvailableDonationsForAllocationView(generics.ListAPIView):
             project=expenditure.project,
             status=DonationStatus.PAID
         ).exclude(id__in=allocated_ids).order_by('-paid_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class MyCertificateListView(generics.ListAPIView):
+    serializer_class = DonationCertificateListSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = DonationCertificate.objects.filter(user=self.request.user)
+        certificate_type = self.request.query_params.get('certificate_type')
+        if certificate_type:
+            queryset = queryset.filter(certificate_type=certificate_type)
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class CertificateDetailView(generics.RetrieveAPIView):
+    serializer_class = DonationCertificateDetailSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = DonationCertificate.objects.all()
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.user != request.user and request.user.role not in ['auditor', 'admin']:
+            return Response({
+                'code': 403,
+                'message': '无权查看该证书'
+            }, status=status.HTTP_403_FORBIDDEN)
+        serializer = self.get_serializer(instance)
+        return Response({
+            'code': 200,
+            'message': '获取成功',
+            'data': serializer.data
+        })
+
+
+class CertificateVerifyView(generics.GenericAPIView):
+    serializer_class = CertificateVerifySerializer
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        certificate_no = serializer.validated_data['certificate_no']
+
+        try:
+            certificate = DonationCertificate.objects.get(certificate_no=certificate_no)
+        except DonationCertificate.DoesNotExist:
+            return Response({
+                'code': 404,
+                'message': '证书不存在',
+                'data': {'is_valid': False}
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        is_valid = certificate.verify_integrity()
+
+        provided_hash = serializer.validated_data.get('integrity_hash')
+        hash_matched = True
+        if provided_hash:
+            import hmac as hmac_mod
+            hash_matched = hmac_mod.compare_digest(provided_hash, certificate.integrity_hash)
+
+        detail_serializer = DonationCertificateDetailSerializer(certificate)
+        return Response({
+            'code': 200,
+            'message': '证书验证通过' if is_valid and hash_matched else '证书验证失败，数据可能已被篡改',
+            'data': {
+                **detail_serializer.data,
+                'is_valid': is_valid,
+                'hash_matched': hash_matched
+            }
+        })
+
+
+class ProjectCertificateListView(generics.ListAPIView):
+    serializer_class = DonationCertificateListSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        project_id = self.kwargs['project_id']
+        return DonationCertificate.objects.filter(project_id=project_id)
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()

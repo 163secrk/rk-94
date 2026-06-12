@@ -6,7 +6,8 @@ import json
 from .models import (
     Project, ProjectBudget, ProjectStatus, ProjectCategory,
     Donation, DonationStatus, RefundRequest, RefundRequestStatus,
-    Expenditure, ExpenditureInvoice, DonationExpenditure, ExpenditureType
+    Expenditure, ExpenditureInvoice, DonationExpenditure, ExpenditureType,
+    DonationCertificate, CertificateType
 )
 
 User = get_user_model()
@@ -482,3 +483,42 @@ class ProjectExpenditureSummarySerializer(serializers.ModelSerializer):
         return DonationExpenditure.objects.filter(
             expenditure__project=obj
         ).aggregate(total=db_models.Sum('amount'))['total'] or Decimal('0')
+
+
+class CertificateProjectInfoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Project
+        fields = ['id', 'title', 'category', 'cover_image']
+
+
+class DonationCertificateListSerializer(serializers.ModelSerializer):
+    certificate_type_display = serializers.CharField(source='get_certificate_type_display', read_only=True)
+    project = CertificateProjectInfoSerializer(read_only=True)
+
+    class Meta:
+        model = DonationCertificate
+        fields = [
+            'id', 'certificate_no', 'certificate_type', 'certificate_type_display',
+            'donation_amount', 'project', 'issued_at'
+        ]
+
+
+class DonationCertificateDetailSerializer(serializers.ModelSerializer):
+    certificate_type_display = serializers.CharField(source='get_certificate_type_display', read_only=True)
+    project = CertificateProjectInfoSerializer(read_only=True)
+    is_valid = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DonationCertificate
+        fields = [
+            'id', 'certificate_no', 'certificate_type', 'certificate_type_display',
+            'donation_amount', 'project', 'integrity_hash', 'is_valid', 'issued_at'
+        ]
+
+    def get_is_valid(self, obj):
+        return obj.verify_integrity()
+
+
+class CertificateVerifySerializer(serializers.Serializer):
+    certificate_no = serializers.CharField(max_length=64)
+    integrity_hash = serializers.CharField(max_length=128, required=False)
