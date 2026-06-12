@@ -214,8 +214,8 @@
 import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
-import { getMySupportedProjectUpdates } from '@/api/projects'
-import type { ProjectUpdate } from '@/types'
+import { getMySupportedProjectUpdates, getMyHonorProfile } from '@/api/projects'
+import type { ProjectUpdate, UserHonorProfile } from '@/types'
 import {
   CircleCheck, Warning, Wallet, Files, Star,
   TrendCharts, InfoFilled, User, Search, Plus, FolderOpened,
@@ -226,25 +226,26 @@ const router = useRouter()
 const userStore = useUserStore()
 const updatesLoading = ref(false)
 const supportedUpdates = ref<ProjectUpdate[]>([])
+const honorProfile = ref<UserHonorProfile | null>(null)
 
 const stats = computed(() => [
   {
     label: '累计捐赠',
-    value: '¥ 0.00',
+    value: `¥ ${Number(honorProfile.value?.total_donation_amount || 0).toFixed(2)}`,
     icon: 'Wallet',
     bgColor: 'bg-love-50',
     iconColor: 'text-love',
   },
   {
     label: '参与项目',
-    value: supportedUpdates.value.length > 0 ? new Set(supportedUpdates.value.map(u => u.project.id)).size : 0,
+    value: honorProfile.value?.supported_projects_count || 0,
     icon: 'Files',
     bgColor: 'bg-blue-50',
     iconColor: 'text-blue-500',
   },
   {
     label: '爱心积分',
-    value: 0,
+    value: honorProfile.value?.love_points || 0,
     icon: 'Star',
     bgColor: 'bg-yellow-50',
     iconColor: 'text-yellow-500',
@@ -361,7 +362,17 @@ const formatDateTime = (dateStr: string) => {
   return new Date(dateStr).toLocaleString('zh-CN')
 }
 
+const fetchHonorProfile = async () => {
+  try {
+    const res = await getMyHonorProfile()
+    honorProfile.value = res
+  } catch (error) {
+    console.error('Fetch honor profile error:', error)
+  }
+}
+
 onMounted(() => {
+  fetchHonorProfile()
   if (userStore.isDonor) {
     refreshSupportedUpdates()
   }

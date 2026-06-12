@@ -912,15 +912,7 @@ class ProjectUpdateCreateView(generics.CreateAPIView):
     parser_classes = [parsers.MultiPartParser, parsers.FormParser]
 
     def create(self, request, *args, **kwargs):
-        data = request.data.copy()
-        images = request.FILES.getlist('images')
-        videos = request.FILES.getlist('videos')
-        if images:
-            data.setlist('images', images)
-        if videos:
-            data.setlist('videos', videos)
-
-        serializer = self.get_serializer(data=data)
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         project_update = serializer.save()
         detail_serializer = ProjectUpdateDetailSerializer(project_update)

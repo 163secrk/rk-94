@@ -4,7 +4,8 @@ import type {
   Expenditure, ExpenditureCreateForm, ExpenditureInvoice,
   DonationAllocationCreateForm, DonationAllocationDetail,
   DonationTracking, ProjectExpenditureSummary,
-  ProjectUpdate, ProjectUpdateCreateForm, Notification, NotificationListResponse
+  ProjectUpdate, ProjectUpdateCreateForm, Notification, NotificationListResponse,
+  UserHonorProfile
 } from '@/types'
 
 export const getPublicProjects = (category?: string) => {
@@ -134,4 +135,8 @@ export const markNotificationsRead = (notificationIds?: number[], all = false) =
 
 export const getNotificationDetail = (id: number) => {
   return request.get<any, Notification>(`/projects/notifications/${id}/`)
+}
+
+export const getMyHonorProfile = () => {
+  return request.get<any, UserHonorProfile>('/projects/honor/my/')
 }

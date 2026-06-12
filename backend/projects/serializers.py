@@ -1,7 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.db import models as db_models
-from django.db import transaction
 from decimal import Decimal
 import json
 from .models import (
@@ -602,20 +601,9 @@ class ProjectUpdateDetailSerializer(serializers.ModelSerializer):
 
 
 class ProjectUpdateCreateSerializer(serializers.ModelSerializer):
-    images = serializers.ListField(
-        child=serializers.FileField(),
-        required=False,
-        write_only=True
-    )
-    videos = serializers.ListField(
-        child=serializers.FileField(),
-        required=False,
-        write_only=True
-    )
-
     class Meta:
         model = ProjectUpdate
-        fields = ['project', 'title', 'content', 'images', 'videos']
+        fields = ['project', 'title', 'content']
 
     def validate_project(self, value):
         user = self.context['request'].user
@@ -627,17 +615,32 @@ class ProjectUpdateCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         content = attrs.get('content', '')
-        images = attrs.get('images', [])
-        videos = attrs.get('videos', [])
+        request = self.context.get('request')
+        images = request.FILES.getlist('images') if request else []
+        videos = request.FILES.getlist('videos') if request else []
         if not content.strip() and not images and not videos:
             raise serializers.ValidationError('至少需要填写文字内容或上传图片/视频')
         return attrs
 
-    @transaction.atomic
+    def run_validation(self, data=serializers.empty):
+        request = self.context.get('request')
+        if request and request.content_type and 'multipart' in request.content_type:
+            validated_data = {}
+            for field_name in ['project', 'title', 'content']:
+                if field_name in data:
+                    field = self.fields[field_name]
+                    validated_data[field_name] = field.run_validation(data[field_name])
+
+            value = self.validate(validated_data)
+            return value
+
+        return super().run_validation(data)
+
     def create(self, validated_data):
-        images_data = validated_data.pop('images', [])
-        videos_data = validated_data.pop('videos', [])
-        user = self.context['request'].user
+        request = self.context['request']
+        images_data = request.FILES.getlist('images') if request else []
+        videos_data = request.FILES.getlist('videos') if request else []
+        user = request.user
         validated_data['initiator'] = user
         project_update = ProjectUpdate.objects.create(**validated_data)
 
@@ -733,6 +736,7 @@ class UserHonorProfileSerializer(serializers.ModelSerializer):
     next_badge_threshold = serializers.SerializerMethodField()
     points_to_next = serializers.SerializerMethodField()
     available_receipt_types = serializers.SerializerMethodField()
+    supported_projects_count = serializers.SerializerMethodField()
 
     class Meta:
         model = UserHonorProfile
@@ -742,8 +746,14 @@ class UserHonorProfileSerializer(serializers.ModelSerializer):
             'donation_points', 'streak_points',
             'last_donation_date',
             'next_badge_level', 'next_badge_threshold', 'points_to_next',
-            'available_receipt_types', 'updated_at'
+            'available_receipt_types', 'supported_projects_count', 'updated_at'
         ]
+
+    def get_supported_projects_count(self, obj):
+        return Donation.objects.filter(
+            user=obj.user,
+            status=DonationStatus.PAID
+        ).values('project_id').distinct().count()
 
     def get_next_badge_level(self, obj):
         level_order = list(BADGE_THRESHOLDS.keys())

@@ -394,3 +394,20 @@ export interface NotificationListResponse {
   list: Notification[]
   unread_count: number
 }
+
+export interface UserHonorProfile {
+  love_points: number
+  total_donation_amount: string | number
+  consecutive_donation_days: number
+  current_badge_level: string | null
+  badge_level_display: string | null
+  donation_points: number
+  streak_points: number
+  last_donation_date: string | null
+  next_badge_level: string | null
+  next_badge_threshold: number | null
+  points_to_next: number
+  available_receipt_types: Array<{ value: string; label: string; available: boolean }>
+  supported_projects_count: number
+  updated_at: string
+}
